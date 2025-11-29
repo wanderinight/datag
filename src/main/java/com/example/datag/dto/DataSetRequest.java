@@ -18,4 +18,6 @@ public class DataSetRequest {
     private String description;
     private String location;
     private String format;
+    private Long dataSourceId; // 关联的数据源ID（如果数据来自数据库）
+    private String tableName; // 数据库表名（如果数据来自数据库）
 }

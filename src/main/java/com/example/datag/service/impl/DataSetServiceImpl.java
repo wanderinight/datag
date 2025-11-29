@@ -38,6 +38,8 @@ public class DataSetServiceImpl implements DataSetService {
                 .description(request.getDescription())
                 .location(request.getLocation())
                 .format(request.getFormat())
+                .dataSourceId(request.getDataSourceId())
+                .tableName(request.getTableName())
                 .build();
         return dataSetRepository.save(dataSet);
     }
@@ -95,6 +97,8 @@ public class DataSetServiceImpl implements DataSetService {
             existingDataSet.setDescription(request.getDescription());
             existingDataSet.setLocation(request.getLocation());
             existingDataSet.setFormat(request.getFormat());
+            existingDataSet.setDataSourceId(request.getDataSourceId());
+            existingDataSet.setTableName(request.getTableName());
             return dataSetRepository.save(existingDataSet);
         }
         return null;

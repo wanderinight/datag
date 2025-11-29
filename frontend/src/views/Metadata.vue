@@ -18,6 +18,15 @@
                 :value="ds.id"
               />
             </el-select>
+            <el-button 
+              type="success" 
+              @click="handleGenerate" 
+              :disabled="!selectedDataSetId"
+              style="margin-right: 10px"
+            >
+              <el-icon><MagicStick /></el-icon>
+              自动生成
+            </el-button>
             <el-button type="primary" @click="handleAdd" :disabled="!selectedDataSetId">
               <el-icon><Plus /></el-icon>
               新增元数据
@@ -37,9 +46,21 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="defaultValue" label="默认值" width="120" />
-        <el-table-column prop="description" label="描述" show-overflow-tooltip />
-        <el-table-column prop="createdAt" label="创建时间" width="180" />
+        <el-table-column prop="defaultValue" label="默认值" width="120">
+          <template #default="{ row }">
+            {{ row.defaultValue || '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="description" label="描述" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ row.description || '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="createdAt" label="创建时间" width="180">
+          <template #default="{ row }">
+            {{ formatDate(row.createdAt) }}
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
             <el-button size="small" @click="handleEdit(row)">编辑</el-button>
@@ -166,7 +187,14 @@ const handleAdd = () => {
 const handleEdit = (row) => {
   dialogTitle.value = '编辑元数据'
   editingId.value = row.id
-  form.value = { ...row }
+  form.value = {
+    dataSetId: row.dataSetId || selectedDataSetId.value,
+    fieldName: row.fieldName,
+    fieldType: row.fieldType,
+    isNullable: row.isNullable !== undefined ? row.isNullable : true,
+    defaultValue: row.defaultValue || '',
+    description: row.description || ''
+  }
   dialogVisible.value = true
 }
 
@@ -188,6 +216,17 @@ const handleDelete = async (row) => {
 const handleSubmit = async () => {
   try {
     await formRef.value.validate()
+    
+    // 确保dataSetId已设置
+    if (!form.value.dataSetId) {
+      form.value.dataSetId = selectedDataSetId.value
+    }
+    
+    if (!form.value.dataSetId) {
+      ElMessage.warning('请先选择数据集')
+      return
+    }
+    
     if (editingId.value) {
       await metadataApi.update(editingId.value, form.value)
       ElMessage.success('更新成功')
@@ -199,13 +238,46 @@ const handleSubmit = async () => {
     loadData()
   } catch (error) {
     if (error !== false) {
-      ElMessage.error('操作失败: ' + error.message)
+      ElMessage.error('操作失败: ' + (error.message || '未知错误'))
     }
   }
 }
 
 const handleDialogClose = () => {
   formRef.value?.resetFields()
+}
+
+const handleGenerate = async () => {
+  if (!selectedDataSetId.value) {
+    ElMessage.warning('请先选择数据集')
+    return
+  }
+  
+  try {
+    await ElMessageBox.confirm('将从数据集自动生成元数据，是否继续？', '提示', {
+      type: 'info'
+    })
+    loading.value = true
+    await metadataApi.generateFromDataSet(selectedDataSetId.value)
+    ElMessage.success('生成成功')
+    loadData()
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error('生成失败: ' + error.message)
+    }
+  } finally {
+    loading.value = false
+  }
+}
+
+const formatDate = (dateStr) => {
+  if (!dateStr) return '-'
+  try {
+    const date = new Date(dateStr)
+    return date.toLocaleString('zh-CN')
+  } catch (e) {
+    return dateStr
+  }
 }
 
 onMounted(() => {

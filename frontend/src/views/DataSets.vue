@@ -182,7 +182,14 @@ const handleAdd = () => {
 const handleEdit = (row) => {
   dialogTitle.value = '编辑数据集'
   editingId.value = row.id
-  form.value = { ...row }
+  form.value = {
+    name: row.name || '',
+    format: row.format || 'TABLE',
+    location: row.location || '',
+    dataSourceId: row.dataSourceId || null,
+    tableName: row.tableName || '',
+    description: row.description || ''
+  }
   dialogVisible.value = true
 }
 
@@ -208,18 +215,29 @@ const handleDelete = async (row) => {
 const handleSubmit = async () => {
   try {
     await formRef.value.validate()
+    
+    // 构建请求数据，确保所有字段都正确传递
+    const requestData = {
+      name: form.value.name,
+      format: form.value.format,
+      location: form.value.location,
+      description: form.value.description || '',
+      dataSourceId: form.value.dataSourceId || null,
+      tableName: form.value.tableName || ''
+    }
+    
     if (editingId.value) {
-      await dataSetApi.update(editingId.value, form.value)
+      await dataSetApi.update(editingId.value, requestData)
       ElMessage.success('更新成功')
     } else {
-      await dataSetApi.create(form.value)
+      await dataSetApi.create(requestData)
       ElMessage.success('创建成功')
     }
     dialogVisible.value = false
     loadData()
   } catch (error) {
     if (error !== false) {
-      ElMessage.error('操作失败: ' + error.message)
+      ElMessage.error('操作失败: ' + (error.message || '未知错误'))
     }
   }
 }
