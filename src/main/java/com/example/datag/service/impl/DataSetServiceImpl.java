@@ -141,7 +141,8 @@ public class DataSetServiceImpl implements DataSetService {
                 .name(dataSetName)
                 .description("从数据源 " + dataSource.getName() + " 导入的数据集")
                 .location(location)
-                .format(determineFormatFromDataSource(dataSource.getType())) // 根据数据源类型确定格式
+                .format(determineFormatFromDataSource(dataSource.getType()))// 根据数据源类型确定格式
+                .dataSourceId(dataSourceId)
                 .build();
 
         return dataSetRepository.save(dataSet);

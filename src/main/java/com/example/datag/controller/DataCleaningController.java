@@ -148,4 +148,30 @@ public class DataCleaningController {
         DataSet processedDataSet = dataCleaningService.executeCleaningProcess(dataSetId, cleaningSteps);
         return ResponseEntity.ok(processedDataSet);
     }
+
+    /**
+     * 根据数据集location字段对应的本地数据表去重
+     * POST /api/data-cleaning/deduplicate-by-location
+     *
+     * 做了什么：
+     * - 从数据集的location字段解析出数据库表名
+     * - 使用本地默认数据源执行去重操作
+     * - 支持location格式：表名 或 数据库.表名
+     *
+     * 为什么需要：
+     * - 直接根据数据集位置信息执行去重
+     * - 无需预先配置数据源关联
+     * - 适用于本地数据库表的快速去重
+     *
+     * 请求参数示例：
+     * - dataSetId: 1
+     * - duplicateFields: ["email", "phone"]
+     */
+    @PostMapping("/deduplicate-by-location")
+    public ResponseEntity<DataSet> removeDuplicatesByLocation(
+            @RequestParam Long dataSetId,
+            @RequestParam List<String> duplicateFields) {
+        DataSet cleanedDataSet = dataCleaningService.removeDuplicatesByLocation(dataSetId, duplicateFields);
+        return ResponseEntity.ok(cleanedDataSet);
+    }
 }

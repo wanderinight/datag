@@ -6,8 +6,10 @@ import com.example.datag.repository.DataSetRepository;
 import com.example.datag.service.DataCleaningService;
 import com.example.datag.service.DataSetService;
 import com.example.datag.service.DataSourceConnectionService;
+import com.example.datag.service.DataSourceService;
 import com.example.datag.service.MetaDataService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import java.util.List;
@@ -40,6 +42,10 @@ public class DataCleaningServiceImpl implements DataCleaningService {
     private final DataSetService dataSetService;
     private final MetaDataService metaDataService;
     private final DataSourceConnectionService dataSourceConnectionService;
+    private final DataSourceService dataSourceService;
+    
+    @Autowired(required = false)
+    private JdbcTemplate localJdbcTemplate; // 本地默认数据源的JdbcTemplate
 
     /**
      * 去重清洗
@@ -165,7 +171,7 @@ public class DataCleaningServiceImpl implements DataCleaningService {
                 
                 // 执行DELETE操作，删除不符合条件的记录
                 String deleteSql = "DELETE FROM `" + tableName + "` WHERE NOT (" + filterCondition + ")";
-                int deletedRows = jdbcTemplate.update(deleteSql);
+                jdbcTemplate.update(deleteSql);
                 
                 // 更新记录数
                 String countSql = "SELECT COUNT(*) as count FROM `" + tableName + "`";
@@ -442,5 +448,165 @@ public class DataCleaningServiceImpl implements DataCleaningService {
         currentDataSet.setDescription(newDescription);
 
         return dataSetRepository.save(currentDataSet);
+    }
+
+    /**
+     * 根据数据集location字段对应的本地数据表去重
+     * 从location字段解析出数据库表名，使用本地默认数据源执行去重
+     *
+     * location字段格式支持：
+     * 1. 表名：如 "users"
+     * 2. 数据库.表名：如 "datagovernance.users"
+     * 3. 如果location是表名，使用本地默认数据源
+     *
+     * @param dataSetId 数据集ID
+     * @param duplicateFields 去重字段列表
+     * @return 清洗后的数据集
+     */
+    @Override
+    public DataSet removeDuplicatesByLocation(Long dataSetId, List<String> duplicateFields) {
+        // 1. 获取数据集
+        DataSet dataSet = dataSetService.getDataSetById(dataSetId);
+        if (dataSet == null) {
+            throw new RuntimeException("数据集不存在: " + dataSetId);
+        }
+
+        String location = dataSet.getLocation();
+        if (location == null || location.trim().isEmpty()) {
+            throw new RuntimeException("数据集的location字段为空，无法确定数据表位置");
+        }
+
+        // 2. 解析location，提取表名
+        String tableName = parseTableNameFromLocation(location);
+
+        // 3. 验证表名格式
+        if (!isValidTableName(tableName)) {
+            throw new IllegalArgumentException("表名包含非法字符，只允许字母、数字和下划线: " + tableName);
+        }
+
+        // 4. 验证去重字段
+        List<MetaData> metaDataList = metaDataService.getMetaDataByDataSetId(dataSetId);
+        for (String field : duplicateFields) {
+            boolean fieldExists = metaDataList.stream()
+                    .anyMatch(meta -> field.equals(meta.getFieldName()));
+            if (!fieldExists) {
+                throw new RuntimeException("去重字段不存在于数据集中: " + field);
+            }
+        }
+
+        // 5. 使用本地默认数据源执行去重
+        if (localJdbcTemplate == null) {
+            throw new RuntimeException("本地数据源未配置，无法执行去重操作");
+        }
+
+        try {
+            // 检查表是否存在
+            String checkTableSql = "SELECT COUNT(*) as count FROM INFORMATION_SCHEMA.TABLES " +
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?";
+            List<Map<String, Object>> tableCheck = localJdbcTemplate.queryForList(checkTableSql, tableName);
+            if (tableCheck.isEmpty() || ((Number) tableCheck.get(0).get("count")).longValue() == 0) {
+                throw new RuntimeException("表不存在: " + tableName);
+            }
+
+            // 获取去重前的记录数
+            String countBeforeSql = "SELECT COUNT(*) as count FROM `" + tableName + "`";
+            Map<String, Object> countBefore = localJdbcTemplate.queryForMap(countBeforeSql);
+            Long countBeforeValue = ((Number) countBefore.get("count")).longValue();
+
+            // 构建去重字段列表（使用反引号包裹）
+            String fields = String.join(", ", duplicateFields.stream()
+                    .map(f -> "`" + f + "`")
+                    .collect(Collectors.toList()));
+
+            // 创建临时表存储去重后的数据
+            String tempTableName = tableName + "_dedup_" + System.currentTimeMillis();
+            
+            // 使用ROW_NUMBER()或GROUP BY去重，保留第一条记录
+            // 先获取所有列名
+            String getColumnsSql = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS " +
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION";
+            List<Map<String, Object>> columns = localJdbcTemplate.queryForList(getColumnsSql, tableName);
+            String allColumns = columns.stream()
+                    .map(col -> "`" + col.get("COLUMN_NAME") + "`")
+                    .collect(Collectors.joining(", "));
+
+            // 使用ROW_NUMBER()窗口函数去重（MySQL 8.0+支持）
+            // 如果MySQL版本较低，使用GROUP BY方式
+            String createTempTableSql = "CREATE TABLE `" + tempTableName + "` AS " +
+                    "SELECT " + allColumns + " FROM (" +
+                    "  SELECT *, ROW_NUMBER() OVER (PARTITION BY " + fields + " ORDER BY (SELECT NULL)) as rn " +
+                    "  FROM `" + tableName + "`" +
+                    ") t WHERE rn = 1";
+            
+            try {
+                localJdbcTemplate.execute(createTempTableSql);
+            } catch (Exception e) {
+                // 如果ROW_NUMBER()不支持，使用GROUP BY方式
+                createTempTableSql = "CREATE TABLE `" + tempTableName + "` AS " +
+                        "SELECT " + allColumns + " FROM `" + tableName + "` " +
+                        "GROUP BY " + fields;
+                localJdbcTemplate.execute(createTempTableSql);
+            }
+
+            // 删除原表数据
+            localJdbcTemplate.execute("DELETE FROM `" + tableName + "`");
+
+            // 将去重后的数据复制回原表
+            localJdbcTemplate.execute("INSERT INTO `" + tableName + "` SELECT " + allColumns + " FROM `" + tempTableName + "`");
+
+            // 删除临时表
+            localJdbcTemplate.execute("DROP TABLE `" + tempTableName + "`");
+
+            // 获取去重后的记录数
+            Map<String, Object> countAfter = localJdbcTemplate.queryForMap(countBeforeSql);
+            Long countAfterValue = ((Number) countAfter.get("count")).longValue();
+            Long removedCount = countBeforeValue - countAfterValue;
+
+            // 更新数据集记录数
+            dataSet.setRowCount(countAfterValue);
+
+            // 更新数据集描述，记录清洗操作
+            String newDescription = (dataSet.getDescription() != null ? dataSet.getDescription() : "") +
+                    " [已执行去重操作，表: " + tableName + 
+                    ", 去重字段: " + String.join(", ", duplicateFields) +
+                    ", 删除重复记录: " + removedCount + " 条]";
+            dataSet.setDescription(newDescription);
+
+            return dataSetRepository.save(dataSet);
+
+        } catch (Exception e) {
+            throw new RuntimeException("执行去重操作失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 从location字段解析出表名
+     * 支持格式：
+     * 1. "table_name" -> "table_name"
+     * 2. "database.table_name" -> "table_name"
+     * 3. "schema.database.table_name" -> "table_name" (取最后一部分)
+     */
+    private String parseTableNameFromLocation(String location) {
+        if (location == null || location.trim().isEmpty()) {
+            throw new IllegalArgumentException("location不能为空");
+        }
+
+        String trimmed = location.trim();
+        
+        // 如果包含点号，取最后一部分作为表名
+        if (trimmed.contains(".")) {
+            String[] parts = trimmed.split("\\.");
+            return parts[parts.length - 1];
+        }
+
+        // 否则直接返回
+        return trimmed;
+    }
+
+    /**
+     * 验证表名是否安全（只包含字母、数字、下划线）
+     */
+    private boolean isValidTableName(String tableName) {
+        return tableName != null && tableName.matches("^[a-zA-Z0-9_]+$");
     }
 }

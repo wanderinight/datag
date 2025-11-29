@@ -68,4 +68,13 @@ public interface DataCleaningService {
      * @return 清洗完成的数据集
      */
     DataSet executeCleaningProcess(Long dataSetId, List<String> cleaningSteps);
+
+    /**
+     * 根据数据集location字段对应的本地数据表去重
+     * 从location字段解析出数据库表名，使用本地默认数据源执行去重
+     * @param dataSetId 数据集ID
+     * @param duplicateFields 去重字段列表
+     * @return 清洗后的数据集
+     */
+    DataSet removeDuplicatesByLocation(Long dataSetId, List<String> duplicateFields);
 }
