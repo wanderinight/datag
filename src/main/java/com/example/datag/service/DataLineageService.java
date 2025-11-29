@@ -77,4 +77,12 @@ public interface DataLineageService {
      * @return 血缘图的JSON表示
      */
     String generateLineageGraph(Long dataSetId);
+
+    /**
+     * 从数据库自动提取血缘关系
+     * 通过分析视图、外键等提取表之间的依赖关系
+     * @param dataSourceId 数据源ID
+     * @return 提取到的血缘关系列表
+     */
+    List<DataLineage> extractLineageFromDatabase(Long dataSourceId);
 }

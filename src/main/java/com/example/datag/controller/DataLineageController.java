@@ -164,4 +164,24 @@ public class DataLineageController {
         String graphJson = dataLineageService.generateLineageGraph(dataSetId);
         return ResponseEntity.ok(graphJson);
     }
+
+    /**
+     * 从数据库自动提取血缘关系
+     * POST /api/data-lineage/extract/{dataSourceId}
+     *
+     * 做了什么：
+     * - 连接到指定数据源
+     * - 分析视图、外键等提取表之间的依赖关系
+     * - 自动创建血缘关系记录
+     *
+     * 为什么需要：
+     * - 自动化血缘关系发现
+     * - 减少手动维护工作量
+     * - 提高血缘关系的准确性
+     */
+    @PostMapping("/extract/{dataSourceId}")
+    public ResponseEntity<List<DataLineage>> extractLineageFromDatabase(@PathVariable Long dataSourceId) {
+        List<DataLineage> lineages = dataLineageService.extractLineageFromDatabase(dataSourceId);
+        return ResponseEntity.ok(lineages);
+    }
 }

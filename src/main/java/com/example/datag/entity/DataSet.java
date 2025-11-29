@@ -35,6 +35,12 @@ public class DataSet {
     @Column(nullable = false)
     private String format; // 数据格式 (如: CSV, JSON, Parquet等)
 
+    @Column(name = "data_source_id")
+    private Long dataSourceId; // 关联的数据源ID（如果数据来自数据库）
+
+    @Column(name = "table_name")
+    private String tableName; // 数据库表名（如果数据来自数据库）
+
     @Column(name = "row_count")
     private Long rowCount; // 数据行数
 

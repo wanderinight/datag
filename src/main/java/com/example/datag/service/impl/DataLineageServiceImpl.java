@@ -2,12 +2,20 @@ package com.example.datag.service.impl;
 
 import com.example.datag.entity.DataLineage;
 import com.example.datag.entity.DataSet;
+import com.example.datag.entity.DataSource;
 import com.example.datag.repository.DataLineageRepository;
 import com.example.datag.service.DataLineageService;
 import com.example.datag.service.DataSetService;
+import com.example.datag.service.DataSourceConnectionService;
+import com.example.datag.service.DataSourceService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 数据血缘服务实现类
@@ -22,6 +30,8 @@ public class DataLineageServiceImpl implements DataLineageService {
 
     private final DataLineageRepository dataLineageRepository;
     private final DataSetService dataSetService;
+    private final DataSourceConnectionService dataSourceConnectionService;
+    private final DataSourceService dataSourceService;
 
     /**
      * 创建数据血缘关系
@@ -183,5 +193,121 @@ public class DataLineageServiceImpl implements DataLineageService {
         graphJson.append("}");
 
         return graphJson.toString();
+    }
+
+    /**
+     * 从数据库自动提取血缘关系
+     * 通过分析视图、存储过程等提取表之间的依赖关系
+     * @param dataSourceId 数据源ID
+     * @return 提取到的血缘关系列表
+     */
+    public List<DataLineage> extractLineageFromDatabase(Long dataSourceId) {
+        List<DataLineage> lineages = new ArrayList<>();
+        
+        try {
+            DataSource dataSource = dataSourceService.getDataSourceById(dataSourceId);
+            if (dataSource == null) {
+                throw new RuntimeException("数据源不存在: " + dataSourceId);
+            }
+
+            JdbcTemplate jdbcTemplate = dataSourceConnectionService.createJdbcTemplate(dataSourceId);
+            
+            // 1. 提取视图的血缘关系
+            List<Map<String, Object>> views = jdbcTemplate.queryForList(
+                "SELECT TABLE_NAME, VIEW_DEFINITION FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = DATABASE()"
+            );
+            
+            for (Map<String, Object> view : views) {
+                String viewName = (String) view.get("TABLE_NAME");
+                String definition = (String) view.get("VIEW_DEFINITION");
+                
+                // 从视图定义中提取表名
+                List<String> sourceTables = extractTableNamesFromSql(definition);
+                
+                // 为每个源表创建血缘关系
+                for (String sourceTable : sourceTables) {
+                    DataSet sourceDataSet = findDataSetByTableName(dataSourceId, sourceTable);
+                    DataSet targetDataSet = findDataSetByTableName(dataSourceId, viewName);
+                    
+                    if (sourceDataSet != null && targetDataSet != null) {
+                        DataLineage lineage = createLineage(
+                            sourceDataSet.getId(),
+                            targetDataSet.getId(),
+                            "VIEW",
+                            "视图 " + viewName + " 依赖于表 " + sourceTable
+                        );
+                        lineages.add(lineage);
+                    }
+                }
+            }
+            
+            // 2. 提取外键关系（表之间的依赖关系）
+            List<Map<String, Object>> foreignKeys = jdbcTemplate.queryForList(
+                "SELECT " +
+                "  TABLE_NAME, " +
+                "  COLUMN_NAME, " +
+                "  REFERENCED_TABLE_NAME, " +
+                "  REFERENCED_COLUMN_NAME " +
+                "FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE " +
+                "WHERE TABLE_SCHEMA = DATABASE() " +
+                "  AND REFERENCED_TABLE_NAME IS NOT NULL"
+            );
+            
+            for (Map<String, Object> fk : foreignKeys) {
+                String sourceTable = (String) fk.get("REFERENCED_TABLE_NAME");
+                String targetTable = (String) fk.get("TABLE_NAME");
+                
+                DataSet sourceDataSet = findDataSetByTableName(dataSourceId, sourceTable);
+                DataSet targetDataSet = findDataSetByTableName(dataSourceId, targetTable);
+                
+                if (sourceDataSet != null && targetDataSet != null) {
+                    DataLineage lineage = createLineage(
+                        sourceDataSet.getId(),
+                        targetDataSet.getId(),
+                        "FOREIGN_KEY",
+                        "外键关系: " + targetTable + "." + fk.get("COLUMN_NAME") + " -> " + sourceTable + "." + fk.get("REFERENCED_COLUMN_NAME")
+                    );
+                    lineages.add(lineage);
+                }
+            }
+            
+        } catch (Exception e) {
+            throw new RuntimeException("提取血缘关系失败: " + e.getMessage(), e);
+        }
+        
+        return lineages;
+    }
+
+    /**
+     * 从SQL语句中提取表名
+     */
+    private List<String> extractTableNamesFromSql(String sql) {
+        List<String> tableNames = new ArrayList<>();
+        
+        // 简单的正则表达式匹配 FROM 和 JOIN 后的表名
+        Pattern pattern = Pattern.compile("(?:FROM|JOIN)\\s+`?([a-zA-Z0-9_]+)`?", Pattern.CASE_INSENSITIVE);
+        Matcher matcher = pattern.matcher(sql);
+        
+        while (matcher.find()) {
+            String tableName = matcher.group(1);
+            if (!tableNames.contains(tableName)) {
+                tableNames.add(tableName);
+            }
+        }
+        
+        return tableNames;
+    }
+
+    /**
+     * 根据表名查找数据集
+     */
+    private DataSet findDataSetByTableName(Long dataSourceId, String tableName) {
+        List<DataSet> allDataSets = dataSetService.getAllDataSets();
+        return allDataSets.stream()
+            .filter(ds -> ds.getDataSourceId() != null 
+                && ds.getDataSourceId().equals(dataSourceId)
+                && tableName.equals(ds.getTableName()))
+            .findFirst()
+            .orElse(null);
     }
 }

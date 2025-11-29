@@ -8,10 +8,13 @@ import com.example.datag.repository.DataQualityRuleRepository;
 import com.example.datag.repository.DataQualityResultRepository;
 import com.example.datag.service.DataQualityRuleService;
 import com.example.datag.service.DataSetService;
+import com.example.datag.service.DataSourceConnectionService;
 import com.example.datag.service.MetaDataService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 数据质量规则服务实现类
@@ -34,6 +37,7 @@ public class DataQualityRuleServiceImpl implements DataQualityRuleService {
     private final DataQualityResultRepository dataQualityResultRepository;
     private final DataSetService dataSetService;
     private final MetaDataService metaDataService;
+    private final DataSourceConnectionService dataSourceConnectionService;
 
     /**
      * 创建数据质量规则
@@ -269,9 +273,33 @@ public class DataQualityRuleServiceImpl implements DataQualityRuleService {
      * @return 检查结果
      */
     private boolean checkNotNull(DataQualityRule rule) {
-        // 实际应用中应查询数据源检查字段是否为空
-        // 这里模拟检查逻辑
-        return true; // 假设检查通过
+        try {
+            DataSet dataSet = dataSetService.getDataSetById(rule.getDataSetId());
+            if (dataSet == null || dataSet.getDataSourceId() == null || dataSet.getTableName() == null) {
+                // 如果不是数据库表，返回默认值
+                return true;
+            }
+
+            // 连接到实际数据库执行检查
+            JdbcTemplate jdbcTemplate = dataSourceConnectionService.createJdbcTemplate(dataSet.getDataSourceId());
+            String tableName = dataSet.getTableName();
+            String fieldName = rule.getFieldName();
+
+            // 检查字段为空的记录数
+            String sql = "SELECT COUNT(*) as null_count FROM `" + tableName + "` WHERE `" + fieldName + "` IS NULL OR `" + fieldName + "` = ''";
+            Map<String, Object> result = jdbcTemplate.queryForMap(sql);
+            Long nullCount = ((Number) result.get("null_count")).longValue();
+
+            // 获取总记录数
+            String countSql = "SELECT COUNT(*) as total FROM `" + tableName + "`";
+            Map<String, Object> countResult = jdbcTemplate.queryForMap(countSql);
+            Long total = ((Number) countResult.get("total")).longValue();
+
+            // 如果存在空值，检查不通过
+            return nullCount == 0;
+        } catch (Exception e) {
+            throw new RuntimeException("执行非空检查失败: " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -280,9 +308,27 @@ public class DataQualityRuleServiceImpl implements DataQualityRuleService {
      * @return 检查结果
      */
     private boolean checkUnique(DataQualityRule rule) {
-        // 实际应用中应查询数据源检查字段是否唯一
-        // 这里模拟检查逻辑
-        return true; // 假设检查通过
+        try {
+            DataSet dataSet = dataSetService.getDataSetById(rule.getDataSetId());
+            if (dataSet == null || dataSet.getDataSourceId() == null || dataSet.getTableName() == null) {
+                return true;
+            }
+
+            JdbcTemplate jdbcTemplate = dataSourceConnectionService.createJdbcTemplate(dataSet.getDataSourceId());
+            String tableName = dataSet.getTableName();
+            String fieldName = rule.getFieldName();
+
+            // 检查重复值
+            String sql = "SELECT COUNT(*) as total, COUNT(DISTINCT `" + fieldName + "`) as distinct_count FROM `" + tableName + "`";
+            Map<String, Object> result = jdbcTemplate.queryForMap(sql);
+            Long total = ((Number) result.get("total")).longValue();
+            Long distinctCount = ((Number) result.get("distinct_count")).longValue();
+
+            // 如果总数等于去重后的数量，说明唯一
+            return total.equals(distinctCount);
+        } catch (Exception e) {
+            throw new RuntimeException("执行唯一性检查失败: " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -302,9 +348,27 @@ public class DataQualityRuleServiceImpl implements DataQualityRuleService {
      * @return 检查结果
      */
     private boolean checkRange(DataQualityRule rule) {
-        // 实际应用中应根据规则表达式验证数值范围
-        // 这里模拟检查逻辑
-        return true; // 假设检查通过
+        try {
+            DataSet dataSet = dataSetService.getDataSetById(rule.getDataSetId());
+            if (dataSet == null || dataSet.getDataSourceId() == null || dataSet.getTableName() == null) {
+                return true;
+            }
+
+            JdbcTemplate jdbcTemplate = dataSourceConnectionService.createJdbcTemplate(dataSet.getDataSourceId());
+            String tableName = dataSet.getTableName();
+            String fieldName = rule.getFieldName();
+            String expression = rule.getRuleExpression();
+
+            // 解析规则表达式，例如: "0 <= value <= 100" 或 "value > 0"
+            // 这里简化处理，直接使用表达式作为WHERE条件
+            String sql = "SELECT COUNT(*) as invalid_count FROM `" + tableName + "` WHERE NOT (" + expression.replace(fieldName, "`" + fieldName + "`") + ")";
+            Map<String, Object> result = jdbcTemplate.queryForMap(sql);
+            Long invalidCount = ((Number) result.get("invalid_count")).longValue();
+
+            return invalidCount == 0;
+        } catch (Exception e) {
+            throw new RuntimeException("执行范围检查失败: " + e.getMessage(), e);
+        }
     }
 
     /**

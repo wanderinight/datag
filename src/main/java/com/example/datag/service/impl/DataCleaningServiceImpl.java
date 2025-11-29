@@ -5,10 +5,13 @@ import com.example.datag.entity.MetaData;
 import com.example.datag.repository.DataSetRepository;
 import com.example.datag.service.DataCleaningService;
 import com.example.datag.service.DataSetService;
+import com.example.datag.service.DataSourceConnectionService;
 import com.example.datag.service.MetaDataService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -36,6 +39,7 @@ public class DataCleaningServiceImpl implements DataCleaningService {
     private final DataSetRepository dataSetRepository;
     private final DataSetService dataSetService;
     private final MetaDataService metaDataService;
+    private final DataSourceConnectionService dataSourceConnectionService;
 
     /**
      * 去重清洗
@@ -74,10 +78,41 @@ public class DataCleaningServiceImpl implements DataCleaningService {
             }
         }
 
-        // 3. 这里应该实现具体的去重逻辑
-        // 实际项目中需要根据数据格式实现真正的去重算法
-        // 例如：对于CSV文件，需要读取内容并根据指定字段去重
-        // 对于数据库表，可以使用SQL的DISTINCT或GROUP BY操作
+        // 3. 实现去重逻辑
+        if (dataSet.getDataSourceId() != null && dataSet.getTableName() != null) {
+            // 如果是数据库表，执行SQL去重
+            try {
+                JdbcTemplate jdbcTemplate = dataSourceConnectionService.createJdbcTemplate(dataSet.getDataSourceId());
+                String tableName = dataSet.getTableName();
+                
+                // 创建临时表存储去重后的数据
+                String tempTableName = tableName + "_dedup_" + System.currentTimeMillis();
+                String fields = String.join(", ", duplicateFields.stream()
+                        .map(f -> "`" + f + "`")
+                        .collect(Collectors.toList()));
+                
+                // 使用GROUP BY去重，保留第一条记录
+                String createTempTableSql = "CREATE TABLE `" + tempTableName + "` AS " +
+                        "SELECT * FROM `" + tableName + "` GROUP BY " + fields;
+                jdbcTemplate.execute(createTempTableSql);
+                
+                // 删除原表数据
+                jdbcTemplate.execute("DELETE FROM `" + tableName + "`");
+                
+                // 将去重后的数据复制回原表
+                jdbcTemplate.execute("INSERT INTO `" + tableName + "` SELECT * FROM `" + tempTableName + "`");
+                
+                // 删除临时表
+                jdbcTemplate.execute("DROP TABLE `" + tempTableName + "`");
+                
+                // 更新记录数
+                String countSql = "SELECT COUNT(*) as count FROM `" + tableName + "`";
+                Map<String, Object> countResult = jdbcTemplate.queryForMap(countSql);
+                dataSet.setRowCount(((Number) countResult.get("count")).longValue());
+            } catch (Exception e) {
+                throw new RuntimeException("执行去重操作失败: " + e.getMessage(), e);
+            }
+        }
 
         // 4. 更新数据集描述，记录清洗操作
         String newDescription = dataSet.getDescription() +
@@ -121,9 +156,25 @@ public class DataCleaningServiceImpl implements DataCleaningService {
             throw new RuntimeException("过滤条件不能为空");
         }
 
-        // 3. 这里应该实现具体的过滤逻辑
-        // 实际项目中需要解析过滤条件并应用到数据上
-        // 例如：解析SQL WHERE子句格式的条件并应用到数据集
+        // 3. 实现过滤逻辑
+        if (dataSet.getDataSourceId() != null && dataSet.getTableName() != null) {
+            // 如果是数据库表，执行SQL过滤
+            try {
+                JdbcTemplate jdbcTemplate = dataSourceConnectionService.createJdbcTemplate(dataSet.getDataSourceId());
+                String tableName = dataSet.getTableName();
+                
+                // 执行DELETE操作，删除不符合条件的记录
+                String deleteSql = "DELETE FROM `" + tableName + "` WHERE NOT (" + filterCondition + ")";
+                int deletedRows = jdbcTemplate.update(deleteSql);
+                
+                // 更新记录数
+                String countSql = "SELECT COUNT(*) as count FROM `" + tableName + "`";
+                Map<String, Object> countResult = jdbcTemplate.queryForMap(countSql);
+                dataSet.setRowCount(((Number) countResult.get("count")).longValue());
+            } catch (Exception e) {
+                throw new RuntimeException("执行过滤操作失败: " + e.getMessage(), e);
+            }
+        }
 
         // 4. 更新数据集描述，记录清洗操作
         String newDescription = dataSet.getDescription() +
@@ -166,9 +217,57 @@ public class DataCleaningServiceImpl implements DataCleaningService {
             throw new RuntimeException("无效的填充策略: " + fillStrategy);
         }
 
-        // 3. 这里应该实现具体的填充逻辑
-        // 实际项目中需要根据数据类型和填充策略实现不同的填充算法
-        // 例如：数值型字段用平均值填充，文本型字段用众数填充
+        // 3. 实现填充逻辑
+        if (dataSet.getDataSourceId() != null && dataSet.getTableName() != null) {
+            try {
+                JdbcTemplate jdbcTemplate = dataSourceConnectionService.createJdbcTemplate(dataSet.getDataSourceId());
+                String tableName = dataSet.getTableName();
+                
+                // 获取所有字段
+                List<MetaData> metaDataList = metaDataService.getMetaDataByDataSetId(dataSetId);
+                
+                for (MetaData metaData : metaDataList) {
+                    String fieldName = metaData.getFieldName();
+                    String fieldType = metaData.getFieldType();
+                    String updateSql = null;
+                    
+                    switch (fillStrategy.toLowerCase()) {
+                        case "mean":
+                            if (fieldType != null && (fieldType.contains("INT") || fieldType.contains("DECIMAL") || fieldType.contains("FLOAT") || fieldType.contains("DOUBLE"))) {
+                                // 计算平均值并填充
+                                String avgSql = "SELECT AVG(`" + fieldName + "`) as avg_value FROM `" + tableName + "` WHERE `" + fieldName + "` IS NOT NULL";
+                                Map<String, Object> avgResult = jdbcTemplate.queryForMap(avgSql);
+                                Object avgValue = avgResult.get("avg_value");
+                                if (avgValue != null) {
+                                    updateSql = "UPDATE `" + tableName + "` SET `" + fieldName + "` = " + avgValue + " WHERE `" + fieldName + "` IS NULL";
+                                }
+                            }
+                            break;
+                        case "zero":
+                            if (fieldType != null && (fieldType.contains("INT") || fieldType.contains("DECIMAL") || fieldType.contains("FLOAT") || fieldType.contains("DOUBLE"))) {
+                                updateSql = "UPDATE `" + tableName + "` SET `" + fieldName + "` = 0 WHERE `" + fieldName + "` IS NULL";
+                            }
+                            break;
+                        case "forward_fill":
+                            // 前向填充：用前一个非空值填充
+                            updateSql = "UPDATE `" + tableName + "` t1 " +
+                                    "INNER JOIN (SELECT @prev := NULL) t2 " +
+                                    "SET t1.`" + fieldName + "` = IFNULL(t1.`" + fieldName + "`, @prev), @prev := IFNULL(t1.`" + fieldName + "`, @prev) " +
+                                    "ORDER BY t1.id";
+                            break;
+                        default:
+                            // 其他策略暂不实现
+                            break;
+                    }
+                    
+                    if (updateSql != null) {
+                        jdbcTemplate.update(updateSql);
+                    }
+                }
+            } catch (Exception e) {
+                throw new RuntimeException("执行缺失值填充失败: " + e.getMessage(), e);
+            }
+        }
 
         // 4. 更新数据集描述，记录清洗操作
         String newDescription = dataSet.getDescription() +
