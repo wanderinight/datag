@@ -87,44 +87,123 @@ public class DataCleaningServiceImpl implements DataCleaningService {
         }
 
         // 3. 实现去重逻辑
+        JdbcTemplate jdbcTemplate = null;
+        String tableName = null;
+        Long removedCount = 0L;
+        
+        // 优先使用数据源和表名，如果没有则尝试使用location字段
         if (dataSet.getDataSourceId() != null && dataSet.getTableName() != null) {
-            // 如果是数据库表，执行SQL去重
-            try {
-                JdbcTemplate jdbcTemplate = dataSourceConnectionService.createJdbcTemplate(dataSet.getDataSourceId());
-                String tableName = dataSet.getTableName();
-                
-                // 创建临时表存储去重后的数据
-                String tempTableName = tableName + "_dedup_" + System.currentTimeMillis();
-                String fields = String.join(", ", duplicateFields.stream()
-                        .map(f -> "`" + f + "`")
-                        .collect(Collectors.toList()));
-                
-                // 使用GROUP BY去重，保留第一条记录
-                String createTempTableSql = "CREATE TABLE `" + tempTableName + "` AS " +
-                        "SELECT * FROM `" + tableName + "` GROUP BY " + fields;
-                jdbcTemplate.execute(createTempTableSql);
-                
-                // 删除原表数据
-                jdbcTemplate.execute("DELETE FROM `" + tableName + "`");
-                
-                // 将去重后的数据复制回原表
-                jdbcTemplate.execute("INSERT INTO `" + tableName + "` SELECT * FROM `" + tempTableName + "`");
-                
-                // 删除临时表
-                jdbcTemplate.execute("DROP TABLE `" + tempTableName + "`");
-                
-                // 更新记录数
-                String countSql = "SELECT COUNT(*) as count FROM `" + tableName + "`";
-                Map<String, Object> countResult = jdbcTemplate.queryForMap(countSql);
-                dataSet.setRowCount(((Number) countResult.get("count")).longValue());
-            } catch (Exception e) {
-                throw new RuntimeException("执行去重操作失败: " + e.getMessage(), e);
+            jdbcTemplate = dataSourceConnectionService.createJdbcTemplate(dataSet.getDataSourceId());
+            tableName = dataSet.getTableName();
+        } else if (dataSet.getLocation() != null && localJdbcTemplate != null) {
+            // 使用本地数据源和location字段
+            jdbcTemplate = localJdbcTemplate;
+            tableName = parseTableNameFromLocation(dataSet.getLocation());
+            
+            // 验证表名
+            if (!isValidTableName(tableName)) {
+                throw new IllegalArgumentException("表名包含非法字符，只允许字母、数字和下划线: " + tableName);
             }
+        } else {
+            throw new RuntimeException("数据集未配置数据源和表名，或location字段无效，无法执行去重操作");
+        }
+        
+        try {
+            // 检查表是否存在
+            String checkTableSql = "SELECT COUNT(*) as count FROM INFORMATION_SCHEMA.TABLES " +
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?";
+            List<Map<String, Object>> tableCheck = jdbcTemplate.queryForList(checkTableSql, tableName);
+            if (tableCheck.isEmpty() || ((Number) tableCheck.get(0).get("count")).longValue() == 0) {
+                throw new RuntimeException("表不存在: " + tableName);
+            }
+            
+            // 获取去重前的记录数
+            String countBeforeSql = "SELECT COUNT(*) as count FROM `" + tableName + "`";
+            Map<String, Object> countBefore = jdbcTemplate.queryForMap(countBeforeSql);
+            Long countBeforeValue = ((Number) countBefore.get("count")).longValue();
+            
+            // 构建去重字段列表（使用反引号包裹）
+            String fields = String.join(", ", duplicateFields.stream()
+                    .map(f -> "`" + f + "`")
+                    .collect(Collectors.toList()));
+            
+            // 创建临时表存储去重后的数据
+            String tempTableName = tableName + "_dedup_" + System.currentTimeMillis();
+            
+            // 先获取所有列名
+            String getColumnsSql = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS " +
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION";
+            List<Map<String, Object>> columns = jdbcTemplate.queryForList(getColumnsSql, tableName);
+            if (columns.isEmpty()) {
+                throw new RuntimeException("表 " + tableName + " 没有列，无法执行去重操作");
+            }
+            String allColumns = columns.stream()
+                    .map(col -> "`" + col.get("COLUMN_NAME") + "`")
+                    .collect(Collectors.joining(", "));
+            
+            // 使用ROW_NUMBER()窗口函数去重（MySQL 8.0+支持）
+            // 如果MySQL版本较低，使用GROUP BY方式（需要处理非聚合列）
+            String createTempTableSql = "CREATE TABLE `" + tempTableName + "` AS " +
+                    "SELECT " + allColumns + " FROM (" +
+                    "  SELECT *, ROW_NUMBER() OVER (PARTITION BY " + fields + " ORDER BY (SELECT NULL)) as rn " +
+                    "  FROM `" + tableName + "`" +
+                    ") t WHERE rn = 1";
+            
+            try {
+                jdbcTemplate.execute(createTempTableSql);
+            } catch (Exception e) {
+                // 如果ROW_NUMBER()不支持，使用GROUP BY方式
+                // 对于非GROUP BY的列，使用MIN()或MAX()函数
+                List<String> allColumnNames = columns.stream()
+                        .map(col -> col.get("COLUMN_NAME").toString())
+                        .collect(Collectors.toList());
+                
+                List<String> selectColumns = new java.util.ArrayList<>();
+                for (String colName : allColumnNames) {
+                    if (duplicateFields.contains(colName)) {
+                        selectColumns.add("`" + colName + "`");
+                    } else {
+                        // 对于非GROUP BY列，使用MIN()函数（也可以使用MAX()）
+                        selectColumns.add("MIN(`" + colName + "`) as `" + colName + "`");
+                    }
+                }
+                
+                createTempTableSql = "CREATE TABLE `" + tempTableName + "` AS " +
+                        "SELECT " + String.join(", ", selectColumns) + " FROM `" + tableName + "` " +
+                        "GROUP BY " + fields;
+                jdbcTemplate.execute(createTempTableSql);
+            }
+            
+            // 删除原表数据
+            jdbcTemplate.execute("DELETE FROM `" + tableName + "`");
+            
+            // 将去重后的数据复制回原表
+            jdbcTemplate.execute("INSERT INTO `" + tableName + "` SELECT " + allColumns + " FROM `" + tempTableName + "`");
+            
+            // 删除临时表
+            jdbcTemplate.execute("DROP TABLE `" + tempTableName + "`");
+            
+            // 获取去重后的记录数
+            Map<String, Object> countAfter = jdbcTemplate.queryForMap(countBeforeSql);
+            Long countAfterValue = ((Number) countAfter.get("count")).longValue();
+            
+            // 更新数据集记录数
+            dataSet.setRowCount(countAfterValue);
+            
+            // 计算删除的记录数
+            removedCount = countBeforeValue - countAfterValue;
+            
+        } catch (Exception e) {
+            throw new RuntimeException("执行去重操作失败: " + e.getMessage(), e);
         }
 
         // 4. 更新数据集描述，记录清洗操作
-        String newDescription = dataSet.getDescription() +
-                " [已执行去重操作，去重字段: " + String.join(", ", duplicateFields) + "]";
+        String currentDesc = dataSet.getDescription() != null ? dataSet.getDescription() : "";
+        String dedupInfo = removedCount > 0 
+            ? String.format("删除了 %d 条重复记录", removedCount)
+            : "未发现重复记录，所有记录都是唯一的";
+        String newDescription = currentDesc +
+                " [已执行去重操作，去重字段: " + String.join(", ", duplicateFields) + ", " + dedupInfo + "]";
         dataSet.setDescription(newDescription);
 
         // 5. 更新数据集记录（在实际实现中，这里应该保存清洗后的数据）
