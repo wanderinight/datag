@@ -12,8 +12,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -163,28 +165,74 @@ public class DataCleaningServiceImpl implements DataCleaningService {
         }
 
         // 3. 实现过滤逻辑
+        JdbcTemplate jdbcTemplate = null;
+        String tableName = null;
+        
+        // 优先使用数据源和表名，如果没有则尝试使用location字段
         if (dataSet.getDataSourceId() != null && dataSet.getTableName() != null) {
-            // 如果是数据库表，执行SQL过滤
-            try {
-                JdbcTemplate jdbcTemplate = dataSourceConnectionService.createJdbcTemplate(dataSet.getDataSourceId());
-                String tableName = dataSet.getTableName();
-                
-                // 执行DELETE操作，删除不符合条件的记录
-                String deleteSql = "DELETE FROM `" + tableName + "` WHERE NOT (" + filterCondition + ")";
-                jdbcTemplate.update(deleteSql);
-                
-                // 更新记录数
-                String countSql = "SELECT COUNT(*) as count FROM `" + tableName + "`";
-                Map<String, Object> countResult = jdbcTemplate.queryForMap(countSql);
-                dataSet.setRowCount(((Number) countResult.get("count")).longValue());
-            } catch (Exception e) {
-                throw new RuntimeException("执行过滤操作失败: " + e.getMessage(), e);
+            jdbcTemplate = dataSourceConnectionService.createJdbcTemplate(dataSet.getDataSourceId());
+            tableName = dataSet.getTableName();
+        } else if (dataSet.getLocation() != null && localJdbcTemplate != null) {
+            // 使用本地数据源和location字段
+            jdbcTemplate = localJdbcTemplate;
+            tableName = parseTableNameFromLocation(dataSet.getLocation());
+            
+            // 验证表名
+            if (!isValidTableName(tableName)) {
+                throw new IllegalArgumentException("表名包含非法字符，只允许字母、数字和下划线: " + tableName);
             }
+        } else {
+            throw new RuntimeException("数据集未配置数据源和表名，或location字段无效，无法执行过滤操作");
+        }
+        
+        try {
+            // 检查表是否存在
+            String checkTableSql = "SELECT COUNT(*) as count FROM INFORMATION_SCHEMA.TABLES " +
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?";
+            List<Map<String, Object>> tableCheck = jdbcTemplate.queryForList(checkTableSql, tableName);
+            if (tableCheck.isEmpty() || ((Number) tableCheck.get(0).get("count")).longValue() == 0) {
+                throw new RuntimeException("表不存在: " + tableName);
+            }
+            
+            // 获取过滤前的记录数
+            String countBeforeSql = "SELECT COUNT(*) as count FROM `" + tableName + "`";
+            Map<String, Object> countBefore = jdbcTemplate.queryForMap(countBeforeSql);
+            Long countBeforeValue = ((Number) countBefore.get("count")).longValue();
+            
+            // 处理过滤条件：自动为字段名添加反引号（如果用户没有添加）
+            String processedCondition = processFilterCondition(filterCondition, tableName, jdbcTemplate);
+            
+            // 执行DELETE操作，删除不符合条件的记录（保留符合条件的记录）
+            String deleteSql = "DELETE FROM `" + tableName + "` WHERE NOT (" + processedCondition + ")";
+            int deletedRows = jdbcTemplate.update(deleteSql);
+            
+            // 获取过滤后的记录数
+            Map<String, Object> countAfter = jdbcTemplate.queryForMap(countBeforeSql);
+            Long countAfterValue = ((Number) countAfter.get("count")).longValue();
+            Long keptRows = countBeforeValue;
+            
+            // 更新记录数
+            dataSet.setRowCount(countAfterValue);
+            
+            // 记录过滤结果
+            if (deletedRows == 0) {
+                throw new RuntimeException("过滤操作未删除任何记录。请检查过滤条件是否正确，或所有记录都符合条件。过滤前: " + countBeforeValue + " 条，过滤后: " + keptRows + " 条");
+            }
+            
+            // 记录过滤详情（将在后续描述更新中使用）
+            String filterDetails = "删除了 " + deletedRows + " 条记录，保留了 " + keptRows + " 条记录";
+            // 将过滤详情添加到数据集描述中
+            String currentDesc = dataSet.getDescription() != null ? dataSet.getDescription() : "";
+            dataSet.setDescription(currentDesc + " [过滤详情: " + filterDetails + "]");
+            
+        } catch (Exception e) {
+            throw new RuntimeException("执行过滤操作失败: " + e.getMessage(), e);
         }
 
         // 4. 更新数据集描述，记录清洗操作
-        String newDescription = dataSet.getDescription() +
-                " [已执行过滤操作，条件: " + filterCondition + "]";
+        String currentDesc = dataSet.getDescription() != null ? dataSet.getDescription() : "";
+        String newDescription = currentDesc +
+                " [已执行过滤操作，条件: " + filterCondition + ", 表: " + tableName + "]";
         dataSet.setDescription(newDescription);
 
         // 5. 更新数据集记录
@@ -224,60 +272,160 @@ public class DataCleaningServiceImpl implements DataCleaningService {
         }
 
         // 3. 实现填充逻辑
+        JdbcTemplate jdbcTemplate = null;
+        String tableName = null;
+        
+        // 优先使用数据源和表名，如果没有则尝试使用location字段
         if (dataSet.getDataSourceId() != null && dataSet.getTableName() != null) {
-            try {
-                JdbcTemplate jdbcTemplate = dataSourceConnectionService.createJdbcTemplate(dataSet.getDataSourceId());
-                String tableName = dataSet.getTableName();
+            jdbcTemplate = dataSourceConnectionService.createJdbcTemplate(dataSet.getDataSourceId());
+            tableName = dataSet.getTableName();
+        } else if (dataSet.getLocation() != null && localJdbcTemplate != null) {
+            // 使用本地数据源和location字段
+            jdbcTemplate = localJdbcTemplate;
+            tableName = parseTableNameFromLocation(dataSet.getLocation());
+            
+            // 验证表名
+            if (!isValidTableName(tableName)) {
+                throw new IllegalArgumentException("表名包含非法字符，只允许字母、数字和下划线: " + tableName);
+            }
+        } else {
+            throw new RuntimeException("数据集未配置数据源和表名，或location字段无效，无法执行填充操作");
+        }
+        
+        try {
+            // 获取所有字段
+            List<MetaData> metaDataList = metaDataService.getMetaDataByDataSetId(dataSetId);
+            
+            if (metaDataList == null || metaDataList.isEmpty()) {
+                throw new RuntimeException("数据集没有配置元数据，无法执行填充操作");
+            }
+            
+            int filledCount = 0;
+            int skippedCount = 0;
+            StringBuilder filledFields = new StringBuilder();
+            StringBuilder errorMessages = new StringBuilder();
+            
+            for (MetaData metaData : metaDataList) {
+                String fieldName = metaData.getFieldName();
+                String fieldType = metaData.getFieldType();
+                String updateSql = null;
+                int affectedRows = 0;
                 
-                // 获取所有字段
-                List<MetaData> metaDataList = metaDataService.getMetaDataByDataSetId(dataSetId);
-                
-                for (MetaData metaData : metaDataList) {
-                    String fieldName = metaData.getFieldName();
-                    String fieldType = metaData.getFieldType();
-                    String updateSql = null;
-                    
+                try {
                     switch (fillStrategy.toLowerCase()) {
                         case "mean":
                             if (fieldType != null && (fieldType.contains("INT") || fieldType.contains("DECIMAL") || fieldType.contains("FLOAT") || fieldType.contains("DOUBLE"))) {
-                                // 计算平均值并填充
-                                String avgSql = "SELECT AVG(`" + fieldName + "`) as avg_value FROM `" + tableName + "` WHERE `" + fieldName + "` IS NOT NULL";
-                                Map<String, Object> avgResult = jdbcTemplate.queryForMap(avgSql);
-                                Object avgValue = avgResult.get("avg_value");
-                                if (avgValue != null) {
-                                    updateSql = "UPDATE `" + tableName + "` SET `" + fieldName + "` = " + avgValue + " WHERE `" + fieldName + "` IS NULL";
+                                // 先检查是否有非空值
+                                String countSql = "SELECT COUNT(*) as count FROM `" + tableName + "` WHERE `" + fieldName + "` IS NOT NULL AND `" + fieldName + "` != ''";
+                                Map<String, Object> countResult = jdbcTemplate.queryForMap(countSql);
+                                Long nonNullCount = ((Number) countResult.get("count")).longValue();
+                                
+                                if (nonNullCount > 0) {
+                                    // 计算平均值
+                                    // 对于INT类型，使用ROUND四舍五入；对于DECIMAL/FLOAT/DOUBLE，保留精度
+                                    String avgSql;
+                                    if (fieldType.contains("INT")) {
+                                        avgSql = "SELECT ROUND(AVG(`" + fieldName + "`)) as avg_value FROM `" + tableName + "` WHERE `" + fieldName + "` IS NOT NULL AND `" + fieldName + "` != ''";
+                                    } else {
+                                        avgSql = "SELECT AVG(`" + fieldName + "`) as avg_value FROM `" + tableName + "` WHERE `" + fieldName + "` IS NOT NULL AND `" + fieldName + "` != ''";
+                                    }
+                                    
+                                    Map<String, Object> avgResult = jdbcTemplate.queryForMap(avgSql);
+                                    Object avgValue = avgResult.get("avg_value");
+                                    
+                                    if (avgValue != null) {
+                                        // 处理NULL和空字符串的情况
+                                        updateSql = "UPDATE `" + tableName + "` SET `" + fieldName + "` = " + avgValue + " WHERE (`" + fieldName + "` IS NULL OR `" + fieldName + "` = '')";
+                                        affectedRows = jdbcTemplate.update(updateSql);
+                                        if (affectedRows > 0) {
+                                            filledCount++;
+                                            filledFields.append(fieldName).append("(").append(affectedRows).append("行), ");
+                                        }
+                                    } else {
+                                        skippedCount++;
+                                        errorMessages.append(fieldName).append(": 平均值计算结果为NULL; ");
+                                    }
+                                } else {
+                                    skippedCount++;
+                                    errorMessages.append(fieldName).append(": 没有非空值可用于计算平均值; ");
                                 }
+                            } else {
+                                skippedCount++;
+                                errorMessages.append(fieldName).append(": 字段类型").append(fieldType).append("不支持平均值填充; ");
                             }
                             break;
                         case "zero":
                             if (fieldType != null && (fieldType.contains("INT") || fieldType.contains("DECIMAL") || fieldType.contains("FLOAT") || fieldType.contains("DOUBLE"))) {
-                                updateSql = "UPDATE `" + tableName + "` SET `" + fieldName + "` = 0 WHERE `" + fieldName + "` IS NULL";
+                                // 处理NULL和空字符串的情况
+                                updateSql = "UPDATE `" + tableName + "` SET `" + fieldName + "` = 0 WHERE (`" + fieldName + "` IS NULL OR `" + fieldName + "` = '')";
+                                affectedRows = jdbcTemplate.update(updateSql);
+                                if (affectedRows > 0) {
+                                    filledCount++;
+                                    filledFields.append(fieldName).append("(").append(affectedRows).append("行), ");
+                                }
+                            } else {
+                                skippedCount++;
                             }
                             break;
                         case "forward_fill":
-                            // 前向填充：用前一个非空值填充
-                            updateSql = "UPDATE `" + tableName + "` t1 " +
-                                    "INNER JOIN (SELECT @prev := NULL) t2 " +
-                                    "SET t1.`" + fieldName + "` = IFNULL(t1.`" + fieldName + "`, @prev), @prev := IFNULL(t1.`" + fieldName + "`, @prev) " +
-                                    "ORDER BY t1.id";
+                            // 前向填充：用前一个非空值填充（需要表有id字段）
+                            try {
+                                updateSql = "UPDATE `" + tableName + "` t1 " +
+                                        "INNER JOIN (SELECT @prev := NULL) t2 " +
+                                        "SET t1.`" + fieldName + "` = IFNULL(t1.`" + fieldName + "`, @prev), @prev := IFNULL(t1.`" + fieldName + "`, @prev) " +
+                                        "ORDER BY t1.id";
+                                affectedRows = jdbcTemplate.update(updateSql);
+                                if (affectedRows > 0) {
+                                    filledCount++;
+                                    filledFields.append(fieldName).append("(").append(affectedRows).append("行), ");
+                                }
+                            } catch (Exception e) {
+                                // 如果表没有id字段，跳过前向填充
+                                skippedCount++;
+                            }
                             break;
                         default:
                             // 其他策略暂不实现
+                            skippedCount++;
                             break;
                     }
-                    
-                    if (updateSql != null) {
-                        jdbcTemplate.update(updateSql);
-                    }
+                } catch (Exception e) {
+                    // 单个字段填充失败，记录但继续处理其他字段
+                    System.err.println("字段 " + fieldName + " 填充失败: " + e.getMessage());
+                    skippedCount++;
                 }
-            } catch (Exception e) {
-                throw new RuntimeException("执行缺失值填充失败: " + e.getMessage(), e);
             }
+            
+            if (filledCount == 0) {
+                String errorMsg = "没有字段被填充。";
+                if (errorMessages.length() > 0) {
+                    errorMsg += " 详细信息: " + errorMessages.toString();
+                } else {
+                    errorMsg += " 可能原因：1) 所有字段都已填充；2) 字段类型不支持；3) 没有非空值可用于计算平均值";
+                }
+                throw new RuntimeException(errorMsg);
+            }
+            
+            // 记录填充详情（用于后续描述更新）
+            String fillDetails = filledFields.length() > 0 
+                ? filledFields.substring(0, filledFields.length() - 2) 
+                : "无";
+            if (errorMessages.length() > 0) {
+                fillDetails += " | 跳过: " + errorMessages.substring(0, Math.min(errorMessages.length() - 2, 100));
+            }
+            
+            // 将填充详情保存到数据集中（通过后续的描述更新）
+            dataSet.setDescription((dataSet.getDescription() != null ? dataSet.getDescription() : "") + 
+                " [填充详情: " + fillDetails + "]");
+            
+        } catch (Exception e) {
+            throw new RuntimeException("执行缺失值填充失败: " + e.getMessage(), e);
         }
 
         // 4. 更新数据集描述，记录清洗操作
-        String newDescription = dataSet.getDescription() +
-                " [已执行缺失值填充操作，策略: " + fillStrategy + "]";
+        String currentDesc = dataSet.getDescription() != null ? dataSet.getDescription() : "";
+        String newDescription = currentDesc +
+                " [已执行缺失值填充操作，策略: " + fillStrategy + ", 表: " + tableName + "]";
         dataSet.setDescription(newDescription);
 
         // 5. 更新数据集记录
@@ -608,5 +756,90 @@ public class DataCleaningServiceImpl implements DataCleaningService {
      */
     private boolean isValidTableName(String tableName) {
         return tableName != null && tableName.matches("^[a-zA-Z0-9_]+$");
+    }
+
+    /**
+     * 处理过滤条件，自动为字段名添加反引号
+     * 如果用户输入的字段名没有反引号，自动添加
+     * 
+     * @param filterCondition 原始过滤条件
+     * @param tableName 表名
+     * @param jdbcTemplate JdbcTemplate用于获取表结构
+     * @return 处理后的过滤条件
+     */
+    private String processFilterCondition(String filterCondition, String tableName, JdbcTemplate jdbcTemplate) {
+        if (filterCondition == null || filterCondition.trim().isEmpty()) {
+            return filterCondition;
+        }
+        
+        try {
+            // 获取表的所有列名
+            String getColumnsSql = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS " +
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?";
+            List<Map<String, Object>> columns = jdbcTemplate.queryForList(getColumnsSql, tableName);
+            Set<String> columnNames = columns.stream()
+                    .map(col -> col.get("COLUMN_NAME").toString().toLowerCase())
+                    .collect(Collectors.toSet());
+            
+            // 处理过滤条件，为字段名添加反引号
+            String processed = filterCondition;
+            
+            // 使用正则表达式匹配字段名（不在反引号内的标识符）
+            // 匹配模式：单词字符（字母、数字、下划线），但不在反引号内
+            java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b");
+            java.util.regex.Matcher matcher = pattern.matcher(processed);
+            
+            StringBuffer result = new StringBuffer();
+            Set<String> processedFields = new HashSet<>();
+            
+            while (matcher.find()) {
+                String fieldName = matcher.group(1);
+                String fieldNameLower = fieldName.toLowerCase();
+                
+                // 检查是否是表的列名（忽略SQL关键字）
+                if (columnNames.contains(fieldNameLower) && !isSqlKeyword(fieldNameLower)) {
+                    // 检查是否已经被反引号包裹
+                    int start = matcher.start();
+                    boolean alreadyQuoted = false;
+                    if (start > 0 && processed.charAt(start - 1) == '`') {
+                        // 检查是否有对应的结束反引号
+                        int quoteEnd = processed.indexOf('`', matcher.end());
+                        if (quoteEnd > matcher.end()) {
+                            alreadyQuoted = true;
+                        }
+                    }
+                    
+                    if (!alreadyQuoted && !processedFields.contains(fieldName)) {
+                        matcher.appendReplacement(result, "`" + fieldName + "`");
+                        processedFields.add(fieldName);
+                    } else {
+                        matcher.appendReplacement(result, fieldName);
+                    }
+                } else {
+                    matcher.appendReplacement(result, fieldName);
+                }
+            }
+            matcher.appendTail(result);
+            
+            return result.toString();
+            
+        } catch (Exception e) {
+            // 如果处理失败，返回原始条件（可能字段名已经正确格式化了）
+            return filterCondition;
+        }
+    }
+
+    /**
+     * 检查是否是SQL关键字
+     */
+    private boolean isSqlKeyword(String word) {
+        Set<String> keywords = Set.of(
+            "select", "from", "where", "and", "or", "not", "in", "like", "between",
+            "is", "null", "true", "false", "as", "order", "by", "group", "having",
+            "count", "sum", "avg", "max", "min", "distinct", "case", "when", "then",
+            "else", "end", "if", "exists", "all", "any", "some", "union", "join",
+            "inner", "left", "right", "outer", "on", "limit", "offset", "top"
+        );
+        return keywords.contains(word.toLowerCase());
     }
 }
