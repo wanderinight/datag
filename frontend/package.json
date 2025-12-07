@@ -14,7 +14,15 @@
     "element-plus": "^2.4.4",
     "@element-plus/icons-vue": "^2.3.1",
     "echarts": "^5.4.3",
-    "vue-echarts": "^6.6.9"
+    "vue-echarts": "^6.6.9",
+    "vuedraggable": "^4.1.0",
+    "vue-grid-layout": "3.0.0-beta1",
+    "sortablejs": "^1.15.0",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^2.5.1",
+    "xlsx": "^0.18.5",
+    "file-saver": "^2.0.5",
+    "dayjs": "^1.11.10"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^4.5.2",

@@ -30,6 +30,8 @@ public class MetaDataServiceImpl implements MetaDataService {
     private final MetaDataRepository metaDataRepository;
     private final DataSetService dataSetService;
 
+    private final com.example.datag.service.DataSourceConnectionService dataSourceConnectionService;
+
     /**
      * 创建元数据
      * @param request 元数据请求对象
@@ -270,45 +272,48 @@ public class MetaDataServiceImpl implements MetaDataService {
      * @return 元数据列表
      */
     private List<MetaData> analyzeTableStructure(DataSet dataSet) {
-        // 实际应用中需要连接到数据库获取表结构信息
-        // 这里模拟生成一些元数据
-        return List.of(
-                MetaData.builder()
+        if (dataSet.getDataSourceId() == null || dataSet.getTableName() == null) {
+            return new java.util.ArrayList<>();
+        }
+
+        try {
+            // 1. 获取数据库连接工具
+            org.springframework.jdbc.core.JdbcTemplate jdbcTemplate =
+                    dataSourceConnectionService.createJdbcTemplate(dataSet.getDataSourceId());
+
+            // 2. 查询真实的表结构 (DESCRIBE 语句)
+            String sql = "DESCRIBE `" + dataSet.getTableName() + "`";
+            List<java.util.Map<String, Object>> columns = jdbcTemplate.queryForList(sql);
+
+            // 3. 将查询结果转换为 MetaData 对象
+            List<MetaData> metaDataList = new java.util.ArrayList<>();
+
+            for (java.util.Map<String, Object> col : columns) {
+                // MySQL DESCRIBE 返回字段: Field, Type, Null, Key, Default, Extra
+                String fieldName = (String) col.get("Field");
+                String fieldType = (String) col.get("Type");
+                String nullStr = (String) col.get("Null");
+                Object defaultObj = col.get("Default");
+                String description = (String) col.get("Extra"); // 通常把 extra 信息(如 auto_increment) 放在描述里
+
+                MetaData metaData = MetaData.builder()
                         .dataSetId(dataSet.getId())
-                        .fieldName("id")
-                        .fieldType("BIGINT")
-                        .description("主键ID")
-                        .isNullable(false)
-                        .build(),
-                MetaData.builder()
-                        .dataSetId(dataSet.getId())
-                        .fieldName("name")
-                        .fieldType("VARCHAR(255)")
-                        .description("名称字段")
-                        .isNullable(false)
-                        .build(),
-                MetaData.builder()
-                        .dataSetId(dataSet.getId())
-                        .fieldName("description")
-                        .fieldType("TEXT")
-                        .description("描述字段")
-                        .isNullable(true)
-                        .build(),
-                MetaData.builder()
-                        .dataSetId(dataSet.getId())
-                        .fieldName("created_at")
-                        .fieldType("TIMESTAMP")
-                        .description("创建时间")
-                        .isNullable(false)
-                        .build(),
-                MetaData.builder()
-                        .dataSetId(dataSet.getId())
-                        .fieldName("updated_at")
-                        .fieldType("TIMESTAMP")
-                        .description("更新时间")
-                        .isNullable(true)
-                        .build()
-        );
+                        .fieldName(fieldName)
+                        .fieldType(fieldType)
+                        .description(description)
+                        .isNullable("YES".equalsIgnoreCase(nullStr))
+                        .defaultValue(defaultObj != null ? defaultObj.toString() : null)
+                        .build();
+
+                metaDataList.add(metaData);
+            }
+
+            return metaDataList;
+
+        } catch (Exception e) {
+            // 抛出异常以便在日志中看到具体错误
+            throw new RuntimeException("读取数据库表结构失败 [" + dataSet.getTableName() + "]: " + e.getMessage(), e);
+        }
     }
 
     /**
