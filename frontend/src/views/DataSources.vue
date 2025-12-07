@@ -65,19 +65,35 @@
           <el-input v-model="form.name" />
         </el-form-item>
         <el-form-item label="类型" prop="type">
-          <el-select v-model="form.type" style="width: 100%">
+          <el-select v-model="form.type" style="width: 100%" @change="handleTypeChange">
             <el-option label="MySQL" value="MySQL" />
             <el-option label="PostgreSQL" value="PostgreSQL" />
             <el-option label="Oracle" value="Oracle" />
+            <el-option label="CSV" value="CSV" />
           </el-select>
         </el-form-item>
-        <el-form-item label="连接URL" prop="connectionUrl">
-          <el-input v-model="form.connectionUrl" />
+        <el-form-item 
+          label="连接URL" 
+          prop="connectionUrl"
+          :rules="form.type === 'CSV' ? [] : [{ required: true, message: '请输入连接URL', trigger: 'blur' }]"
+        >
+          <el-input 
+            v-model="form.connectionUrl" 
+            :placeholder="form.type === 'CSV' ? '请输入CSV文件路径，如: data/sample_data.csv' : '请输入数据库连接URL'"
+          />
         </el-form-item>
-        <el-form-item label="用户名" prop="username">
+        <el-form-item 
+          v-if="form.type !== 'CSV'"
+          label="用户名" 
+          prop="username"
+        >
           <el-input v-model="form.username" />
         </el-form-item>
-        <el-form-item label="密码" prop="password">
+        <el-form-item 
+          v-if="form.type !== 'CSV'"
+          label="密码" 
+          prop="password"
+        >
           <el-input v-model="form.password" type="password" show-password />
         </el-form-item>
         <el-form-item label="描述">
@@ -119,8 +135,15 @@ const editingId = ref(null)
 const rules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
   type: [{ required: true, message: '请选择类型', trigger: 'change' }],
-  connectionUrl: [{ required: true, message: '请输入连接URL', trigger: 'blur' }],
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }]
+  connectionUrl: [{ required: true, message: '请输入连接URL或文件路径', trigger: 'blur' }]
+}
+
+const handleTypeChange = () => {
+  // 当类型改变时，如果是CSV类型，清空用户名和密码
+  if (form.value.type === 'CSV') {
+    form.value.username = ''
+    form.value.password = ''
+  }
 }
 
 const loadData = async () => {

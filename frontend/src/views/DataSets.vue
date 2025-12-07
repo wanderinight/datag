@@ -35,8 +35,9 @@
         <el-table-column prop="rowCount" label="记录数" width="100" />
         <el-table-column prop="description" label="描述" show-overflow-tooltip />
         <el-table-column prop="createdAt" label="创建时间" width="180" />
-        <el-table-column label="操作" width="250" fixed="right">
+        <el-table-column label="操作" width="300" fixed="right">
           <template #default="{ row }">
+            <el-button size="small" type="primary" @click="handleViewData(row)">查看数据</el-button>
             <el-button size="small" @click="handleEdit(row)">编辑</el-button>
             <el-button size="small" @click="handleViewMetadata(row)">元数据</el-button>
             <el-button size="small" type="danger" @click="handleDelete(row)">删除</el-button>
@@ -195,6 +196,19 @@ const handleEdit = (row) => {
 
 const handleViewMetadata = (row) => {
   router.push({ path: '/metadata', query: { dataSetId: row.id } })
+}
+
+const handleViewData = (row) => {
+  // 跳转到数据查看页面
+  const tableName = row.tableName || row.location
+  router.push({ 
+    path: '/data-set-data', 
+    query: { 
+      dataSetId: row.id,
+      tableName: tableName,
+      location: row.location
+    } 
+  })
 }
 
 const handleDelete = async (row) => {
