@@ -8,12 +8,16 @@ import com.example.datag.service.DataLineageService;
 import com.example.datag.service.DataSetService;
 import com.example.datag.service.DataSourceConnectionService;
 import com.example.datag.service.DataSourceService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -145,54 +149,152 @@ public class DataLineageServiceImpl implements DataLineageService {
      */
     @Override
     public String generateLineageGraph(Long dataSetId) {
-        // 获取与指定数据集相关的所有血缘关系
-        List<DataLineage> sourceLineages = dataLineageRepository.findBySourceDataSetId(dataSetId);
-        List<DataLineage> targetLineages = dataLineageRepository.findByTargetDataSetId(dataSetId);
+        // 验证数据集是否存在
+        DataSet currentDataSet = dataSetService.getDataSetById(dataSetId);
+        if (currentDataSet == null) {
+            throw new RuntimeException("数据集不存在: " + dataSetId);
+        }
 
-        // 构建图数据结构
+        // 递归收集所有相关的血缘关系和节点
+        Set<Long> processedNodeIds = new HashSet<>();
+        Set<Long> allNodeIds = new HashSet<>();
+        Set<Long> processedLineageIds = new HashSet<>();
+        List<DataLineage> allLineages = new ArrayList<>();
+        
+        // 从当前节点开始，递归收集所有相关的血缘关系
+        collectAllRelatedLineages(dataSetId, processedNodeIds, allNodeIds, processedLineageIds, allLineages);
+
+        // 构建节点和边
+        List<Map<String, Object>> nodes = new ArrayList<>();
+        List<Map<String, Object>> edges = new ArrayList<>();
+
+        // 为所有收集到的节点创建节点数据
+        for (Long nodeId : allNodeIds) {
+            DataSet dataSet = dataSetService.getDataSetById(nodeId);
+            if (dataSet != null) {
+                Map<String, Object> node = new HashMap<>();
+                node.put("id", String.valueOf(nodeId));
+                node.put("name", dataSet.getName());
+                nodes.add(node);
+            }
+        }
+
+        // 为所有血缘关系创建边
+        for (DataLineage lineage : allLineages) {
+            Map<String, Object> edge = new HashMap<>();
+            edge.put("source", String.valueOf(lineage.getSourceDataSetId()));
+            edge.put("target", String.valueOf(lineage.getTargetDataSetId()));
+            edges.add(edge);
+        }
+
+        // 使用Jackson生成JSON
+        try {
+            ObjectMapper objectMapper = new ObjectMapper();
+            Map<String, Object> graphData = new HashMap<>();
+            graphData.put("nodes", nodes);
+            graphData.put("edges", edges);
+            return objectMapper.writeValueAsString(graphData);
+        } catch (Exception e) {
+            // 如果Jackson失败，使用手动构建方式
+            return buildJsonManually(nodes, edges);
+        }
+    }
+
+    /**
+     * 递归收集所有相关的血缘关系
+     * 从指定节点开始，收集所有直接和间接相关的血缘关系
+     */
+    private void collectAllRelatedLineages(Long dataSetId, Set<Long> processedNodeIds, 
+                                          Set<Long> allNodeIds, Set<Long> processedLineageIds,
+                                          List<DataLineage> allLineages) {
+        // 避免重复处理节点
+        if (processedNodeIds.contains(dataSetId)) {
+            return;
+        }
+        processedNodeIds.add(dataSetId);
+        allNodeIds.add(dataSetId);
+
+        // 获取以当前节点为源的所有血缘关系
+        List<DataLineage> sourceLineages = dataLineageRepository.findBySourceDataSetId(dataSetId);
+        for (DataLineage lineage : sourceLineages) {
+            // 避免重复添加血缘关系
+            if (lineage.getId() != null && !processedLineageIds.contains(lineage.getId())) {
+                allLineages.add(lineage);
+                processedLineageIds.add(lineage.getId());
+            }
+            Long targetId = lineage.getTargetDataSetId();
+            allNodeIds.add(targetId);
+            // 递归处理目标节点
+            collectAllRelatedLineages(targetId, processedNodeIds, allNodeIds, processedLineageIds, allLineages);
+        }
+
+        // 获取以当前节点为目标的所有血缘关系
+        List<DataLineage> targetLineages = dataLineageRepository.findByTargetDataSetId(dataSetId);
+        for (DataLineage lineage : targetLineages) {
+            // 避免重复添加血缘关系
+            if (lineage.getId() != null && !processedLineageIds.contains(lineage.getId())) {
+                allLineages.add(lineage);
+                processedLineageIds.add(lineage.getId());
+            }
+            Long sourceId = lineage.getSourceDataSetId();
+            allNodeIds.add(sourceId);
+            // 递归处理源节点
+            collectAllRelatedLineages(sourceId, processedNodeIds, allNodeIds, processedLineageIds, allLineages);
+        }
+    }
+
+    /**
+     * 手动构建JSON字符串（备用方案）
+     */
+    private String buildJsonManually(List<Map<String, Object>> nodes, List<Map<String, Object>> edges) {
         StringBuilder graphJson = new StringBuilder();
         graphJson.append("{\n");
         graphJson.append("  \"nodes\": [\n");
 
-        // 添加节点（数据集）
-        // 这里应该获取相关的数据集信息来构建节点
-        // 为简化示例，我们只添加当前数据集节点
-        DataSet currentDataSet = dataSetService.getDataSetById(dataSetId);
-        if (currentDataSet != null) {
-            graphJson.append("    {\"id\": \"").append(dataSetId).append("\", \"name\": \"").append(currentDataSet.getName()).append("\"},\n");
-        }
-
-        // 添加相关的源和目标数据集节点
-        for (DataLineage lineage : sourceLineages) {
-            DataSet targetDataSet = dataSetService.getDataSetById(lineage.getTargetDataSetId());
-            if (targetDataSet != null) {
-                graphJson.append("    {\"id\": \"").append(lineage.getTargetDataSetId()).append("\", \"name\": \"").append(targetDataSet.getName()).append("\"},\n");
+        // 添加节点
+        for (int i = 0; i < nodes.size(); i++) {
+            Map<String, Object> node = nodes.get(i);
+            String nodeName = escapeJsonString(String.valueOf(node.get("name")));
+            graphJson.append("    {\"id\": \"").append(node.get("id"))
+                    .append("\", \"name\": \"").append(nodeName).append("\"}");
+            if (i < nodes.size() - 1) {
+                graphJson.append(",");
             }
-        }
-
-        for (DataLineage lineage : targetLineages) {
-            DataSet sourceDataSet = dataSetService.getDataSetById(lineage.getSourceDataSetId());
-            if (sourceDataSet != null) {
-                graphJson.append("    {\"id\": \"").append(lineage.getSourceDataSetId()).append("\", \"name\": \"").append(sourceDataSet.getName()).append("\"},\n");
-            }
+            graphJson.append("\n");
         }
 
         graphJson.append("  ],\n");
         graphJson.append("  \"edges\": [\n");
 
-        // 添加边（血缘关系）
-        for (DataLineage lineage : sourceLineages) {
-            graphJson.append("    {\"source\": \"").append(lineage.getSourceDataSetId()).append("\", \"target\": \"").append(lineage.getTargetDataSetId()).append("\"},\n");
-        }
-
-        for (DataLineage lineage : targetLineages) {
-            graphJson.append("    {\"source\": \"").append(lineage.getSourceDataSetId()).append("\", \"target\": \"").append(lineage.getTargetDataSetId()).append("\"},\n");
+        // 添加边
+        for (int i = 0; i < edges.size(); i++) {
+            Map<String, Object> edge = edges.get(i);
+            graphJson.append("    {\"source\": \"").append(edge.get("source"))
+                    .append("\", \"target\": \"").append(edge.get("target")).append("\"}");
+            if (i < edges.size() - 1) {
+                graphJson.append(",");
+            }
+            graphJson.append("\n");
         }
 
         graphJson.append("  ]\n");
         graphJson.append("}");
 
         return graphJson.toString();
+    }
+
+    /**
+     * 转义JSON字符串中的特殊字符
+     */
+    private String escapeJsonString(String str) {
+        if (str == null) {
+            return "";
+        }
+        return str.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t");
     }
 
     /**

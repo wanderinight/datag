@@ -39,8 +39,13 @@ export const dataLineageApi = {
   },
   
   // 生成血缘图
-  generateGraph(dataSetId) {
-    return api.get(`/data-lineage/graph/${dataSetId}`)
+  async generateGraph(dataSetId) {
+    const response = await api.get(`/data-lineage/graph/${dataSetId}`)
+    // 如果返回的是字符串，直接返回；如果是对象，转换为JSON字符串再解析
+    if (typeof response === 'string') {
+      return response
+    }
+    return JSON.stringify(response)
   },
   
   // 从数据库提取血缘关系

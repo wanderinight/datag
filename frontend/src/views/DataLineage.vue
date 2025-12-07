@@ -110,8 +110,10 @@
       v-model="graphDialogVisible"
       title="数据血缘图谱"
       width="900px"
+      @opened="handleGraphDialogOpened"
+      @closed="handleGraphDialogClosed"
     >
-      <div id="lineage-graph" style="width: 100%; height: 600px;"></div>
+      <div id="lineage-graph" style="width: 100%; height: 600px; min-height: 600px;"></div>
     </el-dialog>
   </div>
 </template>
@@ -220,60 +222,207 @@ const handleExtract = async () => {
 
 const handleViewGraph = async (row) => {
   try {
-    const graphData = await dataLineageApi.generateGraph(row.sourceDataSetId)
+    // 使用当前行的源数据集ID生成图谱，显示从源到目标的关系
+    const dataSetId = row.sourceDataSetId || row.targetDataSetId
+    if (!dataSetId) {
+      ElMessage.warning('无法确定数据集ID')
+      return
+    }
+    
+    console.log('开始生成图谱，数据集ID:', dataSetId)
+    const graphData = await dataLineageApi.generateGraph(dataSetId)
+    console.log('获取到的图谱数据:', graphData)
+    
+    // 先打开对话框
     graphDialogVisible.value = true
+    
+    // 等待对话框完全打开后再渲染
     await nextTick()
-    renderGraph(JSON.parse(graphData))
+    // 再等待一小段时间确保DOM完全渲染
+    await new Promise(resolve => setTimeout(resolve, 100))
+    
+    // 解析JSON数据
+    let parsedData
+    if (typeof graphData === 'string') {
+      try {
+        parsedData = JSON.parse(graphData)
+      } catch (e) {
+        console.error('JSON解析失败:', e, '原始数据:', graphData)
+        ElMessage.error('图谱数据格式错误')
+        return
+      }
+    } else {
+      parsedData = graphData
+    }
+    
+    console.log('解析后的数据:', parsedData)
+    
+    if (!parsedData || !parsedData.nodes || parsedData.nodes.length === 0) {
+      ElMessage.warning('该数据集没有血缘关系，无法生成图谱')
+      return
+    }
+    
+    renderGraph(parsedData)
   } catch (error) {
-    ElMessage.error('生成图谱失败: ' + error.message)
+    console.error('生成图谱失败:', error)
+    ElMessage.error('生成图谱失败: ' + (error.message || '未知错误'))
   }
 }
 
 const renderGraph = (graphData) => {
+  console.log('开始渲染图谱，数据:', graphData)
+  
   const container = document.getElementById('lineage-graph')
-  if (!container) return
+  if (!container) {
+    console.error('找不到图谱容器元素')
+    ElMessage.error('找不到图谱容器元素')
+    return
+  }
 
+  // 确保容器有高度
+  if (!container.style.height || container.style.height === '0px') {
+    container.style.height = '600px'
+  }
+
+  // 清理之前的图表实例
   if (graphChart) {
     graphChart.dispose()
+    graphChart = null
   }
 
-  graphChart = echarts.init(container)
-
-  const nodes = graphData.nodes.map(node => ({
-    id: node.id,
-    name: node.name,
-    symbolSize: 50,
-    category: 0
+  // 转换节点数据
+  const nodes = (graphData.nodes || []).map((node, index) => ({
+    id: String(node.id),
+    name: String(node.name || `节点${index + 1}`),
+    symbolSize: 60,
+    category: 0,
+    value: node.name
   }))
 
-  const edges = graphData.edges.map(edge => ({
-    source: edge.source,
-    target: edge.target
+  // 转换边数据
+  const edges = (graphData.edges || []).map(edge => ({
+    source: String(edge.source),
+    target: String(edge.target)
   }))
 
-  const option = {
-    tooltip: {},
-    legend: {
-      data: ['数据集']
-    },
-    series: [{
-      type: 'graph',
-      layout: 'force',
-      data: nodes,
-      links: edges,
-      roam: true,
-      label: {
-        show: true,
-        position: 'right'
+  console.log('转换后的节点数:', nodes.length, '边数:', edges.length)
+  console.log('节点数据:', nodes)
+  console.log('边数据:', edges)
+
+  // 如果没有节点，显示提示
+  if (nodes.length === 0) {
+    ElMessage.warning('没有可显示的节点')
+    return
+  }
+
+  // 初始化图表
+  try {
+    graphChart = echarts.init(container)
+    
+    const option = {
+      title: {
+        text: '数据血缘关系图',
+        left: 'center',
+        top: 20,
+        textStyle: {
+          fontSize: 16
+        }
       },
-      force: {
-        repulsion: 1000,
-        edgeLength: 200
-      }
-    }]
-  }
+      tooltip: {
+        formatter: (params) => {
+          if (params.dataType === 'node') {
+            return `数据集: ${params.data.name}<br/>ID: ${params.data.id}`
+          } else {
+            return `从 ${params.data.source} 到 ${params.data.target}`
+          }
+        }
+      },
+      series: [{
+        name: '数据血缘',
+        type: 'graph',
+        layout: 'force',
+        data: nodes,
+        links: edges,
+        roam: true,
+        focusNodeAdjacency: true,
+        label: {
+          show: true,
+          position: 'right',
+          formatter: '{b}',
+          fontSize: 12,
+          color: '#333'
+        },
+        lineStyle: {
+          color: '#999',
+          curveness: 0.3,
+          width: 2,
+          opacity: 0.6
+        },
+        itemStyle: {
+          color: '#409EFF',
+          borderColor: '#fff',
+          borderWidth: 2
+        },
+        emphasis: {
+          focus: 'adjacency',
+          lineStyle: {
+            width: 4,
+            opacity: 1
+          },
+          itemStyle: {
+            color: '#66b1ff'
+          },
+          label: {
+            fontSize: 14,
+            fontWeight: 'bold'
+          }
+        },
+        force: {
+          repulsion: 1000,
+          edgeLength: 200,
+          gravity: 0.1,
+          layoutAnimation: true
+        }
+      }]
+    }
 
-  graphChart.setOption(option)
+    graphChart.setOption(option, true) // 使用notMerge=true确保完全替换配置
+    
+    // 强制刷新图表，确保在对话框完全打开后渲染
+    setTimeout(() => {
+      if (graphChart) {
+        graphChart.resize()
+        // 如果图表仍然为空，尝试重新设置选项
+        const width = container.offsetWidth
+        const height = container.offsetHeight
+        if (width > 0 && height > 0) {
+          console.log('容器尺寸:', width, 'x', height)
+        } else {
+          console.warn('容器尺寸异常:', width, 'x', height)
+        }
+      }
+    }, 200)
+    
+    console.log('图谱渲染完成，节点数:', nodes.length, '边数:', edges.length)
+    
+    // 响应窗口大小变化
+    const resizeHandler = () => {
+      if (graphChart) {
+        graphChart.resize()
+      }
+    }
+    
+    // 移除旧的监听器（如果存在）
+    if (window._lineageGraphResizeHandler) {
+      window.removeEventListener('resize', window._lineageGraphResizeHandler)
+    }
+    window._lineageGraphResizeHandler = resizeHandler
+    window.addEventListener('resize', resizeHandler)
+    
+  } catch (error) {
+    console.error('渲染图谱时出错:', error)
+    ElMessage.error('渲染图谱失败: ' + error.message)
+  }
 }
 
 const handleDelete = async (row) => {
@@ -307,6 +456,40 @@ const handleSubmit = async () => {
 
 const handleDialogClose = () => {
   formRef.value?.resetFields()
+}
+
+const handleGraphDialogOpened = () => {
+  // 对话框打开后，确保图表容器可见并重新渲染
+  nextTick(() => {
+    const container = document.getElementById('lineage-graph')
+    if (container && graphChart) {
+      // 确保容器有正确的尺寸
+      if (container.offsetWidth === 0 || container.offsetHeight === 0) {
+        container.style.width = '100%'
+        container.style.height = '600px'
+      }
+      // 延迟一下再resize，确保对话框动画完成
+      setTimeout(() => {
+        if (graphChart) {
+          graphChart.resize()
+          console.log('对话框打开后调整图表大小，容器尺寸:', container.offsetWidth, 'x', container.offsetHeight)
+        }
+      }, 300)
+    }
+  })
+}
+
+const handleGraphDialogClosed = () => {
+  // 对话框关闭时清理图表
+  if (graphChart) {
+    graphChart.dispose()
+    graphChart = null
+  }
+  // 移除窗口大小监听器
+  if (window._lineageGraphResizeHandler) {
+    window.removeEventListener('resize', window._lineageGraphResizeHandler)
+    window._lineageGraphResizeHandler = null
+  }
 }
 
 onMounted(() => {
