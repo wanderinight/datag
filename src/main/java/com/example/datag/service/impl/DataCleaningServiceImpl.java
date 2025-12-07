@@ -219,12 +219,6 @@ public class DataCleaningServiceImpl implements DataCleaningService {
                 throw new RuntimeException("过滤操作未删除任何记录。请检查过滤条件是否正确，或所有记录都符合条件。过滤前: " + countBeforeValue + " 条，过滤后: " + keptRows + " 条");
             }
             
-            // 记录过滤详情（将在后续描述更新中使用）
-            String filterDetails = "删除了 " + deletedRows + " 条记录，保留了 " + keptRows + " 条记录";
-            // 将过滤详情添加到数据集描述中
-            String currentDesc = dataSet.getDescription() != null ? dataSet.getDescription() : "";
-            dataSet.setDescription(currentDesc + " [过滤详情: " + filterDetails + "]");
-            
         } catch (Exception e) {
             throw new RuntimeException("执行过滤操作失败: " + e.getMessage(), e);
         }
@@ -773,19 +767,31 @@ public class DataCleaningServiceImpl implements DataCleaningService {
         }
         
         try {
-            // 获取表的所有列名
+            // 获取表的所有列名（保留原始大小写，同时建立小写映射）
             String getColumnsSql = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS " +
                     "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?";
             List<Map<String, Object>> columns = jdbcTemplate.queryForList(getColumnsSql, tableName);
-            Set<String> columnNames = columns.stream()
-                    .map(col -> col.get("COLUMN_NAME").toString().toLowerCase())
-                    .collect(Collectors.toSet());
+            Set<String> columnNames = new HashSet<>();
+            Map<String, String> columnNameMap = new java.util.HashMap<>(); // 小写 -> 原始大小写
+            
+            for (Map<String, Object> col : columns) {
+                String colName = col.get("COLUMN_NAME").toString();
+                columnNames.add(colName);
+                columnNames.add(colName.toLowerCase());
+                columnNames.add(colName.toUpperCase());
+                columnNameMap.put(colName.toLowerCase(), colName);
+            }
             
             // 处理过滤条件，为字段名添加反引号
-            String processed = filterCondition;
+            String processed = filterCondition.trim();
             
-            // 使用正则表达式匹配字段名（不在反引号内的标识符）
-            // 匹配模式：单词字符（字母、数字、下划线），但不在反引号内
+            // 如果条件中已经包含反引号，可能用户已经手动添加了，直接返回
+            if (processed.contains("`")) {
+                return processed;
+            }
+            
+            // 使用正则表达式匹配字段名（单词边界）
+            // 匹配模式：字母或下划线开头，后跟字母、数字、下划线
             java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b");
             java.util.regex.Matcher matcher = pattern.matcher(processed);
             
@@ -797,23 +803,18 @@ public class DataCleaningServiceImpl implements DataCleaningService {
                 String fieldNameLower = fieldName.toLowerCase();
                 
                 // 检查是否是表的列名（忽略SQL关键字）
-                if (columnNames.contains(fieldNameLower) && !isSqlKeyword(fieldNameLower)) {
-                    // 检查是否已经被反引号包裹
-                    int start = matcher.start();
-                    boolean alreadyQuoted = false;
-                    if (start > 0 && processed.charAt(start - 1) == '`') {
-                        // 检查是否有对应的结束反引号
-                        int quoteEnd = processed.indexOf('`', matcher.end());
-                        if (quoteEnd > matcher.end()) {
-                            alreadyQuoted = true;
-                        }
-                    }
+                boolean isColumn = columnNames.contains(fieldName) || columnNames.contains(fieldNameLower);
+                
+                if (isColumn && !isSqlKeyword(fieldNameLower)) {
+                    // 获取原始列名（保持原始大小写）
+                    String originalColName = columnNameMap.getOrDefault(fieldNameLower, fieldName);
                     
-                    if (!alreadyQuoted && !processedFields.contains(fieldName)) {
-                        matcher.appendReplacement(result, "`" + fieldName + "`");
+                    // 为字段名添加反引号
+                    if (!processedFields.contains(fieldName)) {
+                        matcher.appendReplacement(result, "`" + originalColName + "`");
                         processedFields.add(fieldName);
                     } else {
-                        matcher.appendReplacement(result, fieldName);
+                        matcher.appendReplacement(result, "`" + originalColName + "`");
                     }
                 } else {
                     matcher.appendReplacement(result, fieldName);
@@ -824,8 +825,10 @@ public class DataCleaningServiceImpl implements DataCleaningService {
             return result.toString();
             
         } catch (Exception e) {
-            // 如果处理失败，返回原始条件（可能字段名已经正确格式化了）
-            return filterCondition;
+            // 如果处理失败，尝试简单处理：为常见的字段名模式添加反引号
+            // 匹配 "字段名 操作符" 的模式，如 "value >", "value =", "value <" 等
+            String simpleProcessed = filterCondition.replaceAll("\\b(value|id|name|type|status|count|amount|price|date|time)\\b", "`$1`");
+            return simpleProcessed;
         }
     }
 
