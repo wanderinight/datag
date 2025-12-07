@@ -119,21 +119,25 @@ const loadDataSetInfo = async () => {
     dataSetInfo.value = info
     dataSetName.value = info.name || '数据集数据'
     
-    // 确定表名
+    // 确定表名（保留完整格式，支持数据库.表名）
     const targetTableName = info.tableName || info.location || tableName.value
     if (targetTableName) {
-      // 如果location是数据库.表名格式，提取表名
-      const finalTableName = targetTableName.includes('.') 
-        ? targetTableName.split('.').pop() 
-        : targetTableName
-      
+      // 保留完整表名格式（如datago.numbers），不提取
       // 更新路由参数
-      if (route.query.tableName !== finalTableName) {
+      if (route.query.tableName !== targetTableName) {
         router.replace({
-          query: { ...route.query, tableName: finalTableName }
+          query: { ...route.query, tableName: targetTableName }
         })
       }
     }
+    
+    console.log('数据集信息:', {
+      id: info.id,
+      name: info.name,
+      dataSourceId: info.dataSourceId,
+      tableName: info.tableName,
+      location: info.location
+    })
   } catch (error) {
     console.error('加载数据集信息失败:', error)
   }
@@ -150,23 +154,37 @@ const loadData = async () => {
     return
   }
   
-  // 提取表名（如果是数据库.表名格式）
+  // 提取表名（如果是数据库.表名格式，保留完整格式用于跨数据库查询）
   let finalTableName = targetTableName
-  if (targetTableName.includes('.')) {
-    finalTableName = targetTableName.split('.').pop()
-  }
+  // 如果是数据库.表名格式，保留完整格式，后端会处理
+  // 例如：datago.numbers 会保留为 datago.numbers
   
   loading.value = true
   try {
     // 计算分页参数（后端page从0开始）
     const page = currentPage.value - 1
     
-    // 调用API获取数据
-    const response = await api.get(`/database/tables/${finalTableName}/data`, {
-      params: {
-        page: page,
-        size: pageSize.value
+    // 构建请求参数
+    const params = {
+      page: page,
+      size: pageSize.value
+    }
+    
+    // 如果数据集关联了数据源，传递dataSourceId
+    if (dataSetInfo.value?.dataSourceId) {
+      params.dataSourceId = dataSetInfo.value.dataSourceId
+      console.log('使用数据源ID:', params.dataSourceId, '查询表:', finalTableName)
+    } else {
+      console.log('未配置数据源ID，使用默认数据源查询表:', finalTableName)
+      // 如果没有dataSourceId但location是数据库.表名格式，提示用户
+      if (finalTableName.includes('.')) {
+        ElMessage.warning('数据集未配置数据源，如果表在其他数据库中，请先配置数据源关联')
       }
+    }
+    
+    // 调用API获取数据（使用完整表名，支持数据库.表名格式）
+    const response = await api.get(`/database/tables/${encodeURIComponent(finalTableName)}/data`, {
+      params: params
     })
     
     if (response.success) {

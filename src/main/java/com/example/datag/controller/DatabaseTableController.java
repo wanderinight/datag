@@ -126,16 +126,27 @@ public class DatabaseTableController {
 
     /**
      * 获取指定表的数据（分页）
-     * GET /api/database/tables/{tableName}/data?page=0&size=100
+     * GET /api/database/tables/{tableName}/data?page=0&size=100&dataSourceId=1
      */
     @GetMapping("/tables/{tableName}/data")
     public ResponseEntity<Map<String, Object>> getTableData(
             @PathVariable String tableName,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "100") int size) {
+            @RequestParam(defaultValue = "100") int size,
+            @RequestParam(required = false) Long dataSourceId) {
         try {
-            List<Map<String, Object>> data = databaseTableService.getTableData(tableName, page, size);
-            Long totalCount = databaseTableService.getTableCount(tableName);
+            List<Map<String, Object>> data;
+            Long totalCount;
+            
+            // 如果指定了数据源ID，使用对应的数据源
+            if (dataSourceId != null) {
+                data = databaseTableService.getTableDataByDataSource(dataSourceId, tableName, page, size);
+                totalCount = databaseTableService.getTableCountByDataSource(dataSourceId, tableName);
+            } else {
+                // 使用默认数据源
+                data = databaseTableService.getTableData(tableName, page, size);
+                totalCount = databaseTableService.getTableCount(tableName);
+            }
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
@@ -145,6 +156,9 @@ public class DatabaseTableController {
             response.put("size", size);
             response.put("totalCount", totalCount);
             response.put("totalPages", (totalCount + size - 1) / size);
+            if (dataSourceId != null) {
+                response.put("dataSourceId", dataSourceId);
+            }
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             Map<String, Object> response = new HashMap<>();

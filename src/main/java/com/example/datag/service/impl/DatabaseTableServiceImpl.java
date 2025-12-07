@@ -1,6 +1,7 @@
 package com.example.datag.service.impl;
 
 import com.example.datag.service.DatabaseTableService;
+import com.example.datag.service.DataSourceConnectionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -19,6 +20,7 @@ import java.util.Map;
 public class DatabaseTableServiceImpl implements DatabaseTableService {
 
     private final JdbcTemplate jdbcTemplate;
+    private final DataSourceConnectionService dataSourceConnectionService;
 
     /**
      * 执行SQL查询
@@ -191,6 +193,125 @@ public class DatabaseTableServiceImpl implements DatabaseTableService {
             // 使用反引号包裹表名以防止SQL注入
             String sql = "SELECT COUNT(*) as count FROM `" + tableName + "`";
             Map<String, Object> result = jdbcTemplate.queryForMap(sql);
+            Object count = result.get("count");
+            if (count instanceof Number) {
+                return ((Number) count).longValue();
+            }
+            return Long.parseLong(count.toString());
+        } catch (Exception e) {
+            throw new RuntimeException("获取表记录数失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 根据数据源ID获取指定表的数据（分页）
+     * 支持"数据库.表名"格式
+     * @param dataSourceId 数据源ID
+     * @param tableName 表名（支持数据库.表名格式，如datago.numbers）
+     * @param page 页码（从0开始）
+     * @param size 每页大小
+     * @return 表数据列表
+     */
+    @Override
+    public List<Map<String, Object>> getTableDataByDataSource(Long dataSourceId, String tableName, int page, int size) {
+        if (dataSourceId == null) {
+            throw new IllegalArgumentException("数据源ID不能为空");
+        }
+        
+        if (!StringUtils.hasText(tableName)) {
+            throw new IllegalArgumentException("表名不能为空");
+        }
+
+        if (page < 0) {
+            page = 0;
+        }
+        if (size <= 0 || size > 1000) {
+            size = 100;
+        }
+
+        try {
+            // 创建对应数据源的JdbcTemplate
+            JdbcTemplate targetJdbcTemplate = dataSourceConnectionService.createJdbcTemplate(dataSourceId);
+            
+            // 解析表名（支持数据库.表名格式）
+            String databaseName = null;
+            String finalTableName = tableName;
+            
+            if (tableName.contains(".")) {
+                String[] parts = tableName.split("\\.");
+                if (parts.length == 2) {
+                    databaseName = parts[0].trim();
+                    finalTableName = parts[1].trim();
+                }
+            }
+            
+            // 验证表名
+            if (!isValidTableName(finalTableName)) {
+                throw new IllegalArgumentException("表名包含非法字符，只允许字母、数字和下划线: " + finalTableName);
+            }
+            
+            // 构建SQL（如果指定了数据库名，使用数据库.表名格式）
+            int offset = page * size;
+            String sql;
+            if (databaseName != null && isValidTableName(databaseName)) {
+                sql = "SELECT * FROM `" + databaseName + "`.`" + finalTableName + "` LIMIT " + size + " OFFSET " + offset;
+            } else {
+                sql = "SELECT * FROM `" + finalTableName + "` LIMIT " + size + " OFFSET " + offset;
+            }
+            
+            return targetJdbcTemplate.queryForList(sql);
+        } catch (Exception e) {
+            throw new RuntimeException("获取表数据失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 根据数据源ID获取指定表的总记录数
+     * 支持"数据库.表名"格式
+     * @param dataSourceId 数据源ID
+     * @param tableName 表名（支持数据库.表名格式，如datago.numbers）
+     * @return 总记录数
+     */
+    @Override
+    public Long getTableCountByDataSource(Long dataSourceId, String tableName) {
+        if (dataSourceId == null) {
+            throw new IllegalArgumentException("数据源ID不能为空");
+        }
+        
+        if (!StringUtils.hasText(tableName)) {
+            throw new IllegalArgumentException("表名不能为空");
+        }
+
+        try {
+            // 创建对应数据源的JdbcTemplate
+            JdbcTemplate targetJdbcTemplate = dataSourceConnectionService.createJdbcTemplate(dataSourceId);
+            
+            // 解析表名（支持数据库.表名格式）
+            String databaseName = null;
+            String finalTableName = tableName;
+            
+            if (tableName.contains(".")) {
+                String[] parts = tableName.split("\\.");
+                if (parts.length == 2) {
+                    databaseName = parts[0].trim();
+                    finalTableName = parts[1].trim();
+                }
+            }
+            
+            // 验证表名
+            if (!isValidTableName(finalTableName)) {
+                throw new IllegalArgumentException("表名包含非法字符，只允许字母、数字和下划线: " + finalTableName);
+            }
+            
+            // 构建SQL（如果指定了数据库名，使用数据库.表名格式）
+            String sql;
+            if (databaseName != null && isValidTableName(databaseName)) {
+                sql = "SELECT COUNT(*) as count FROM `" + databaseName + "`.`" + finalTableName + "`";
+            } else {
+                sql = "SELECT COUNT(*) as count FROM `" + finalTableName + "`";
+            }
+            
+            Map<String, Object> result = targetJdbcTemplate.queryForMap(sql);
             Object count = result.get("count");
             if (count instanceof Number) {
                 return ((Number) count).longValue();

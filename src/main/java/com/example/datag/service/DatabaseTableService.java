@@ -46,10 +46,28 @@ public interface DatabaseTableService {
     List<Map<String, Object>> getTableData(String tableName, int page, int size);
 
     /**
+     * 根据数据源ID获取指定表的数据（分页）
+     * @param dataSourceId 数据源ID
+     * @param tableName 表名（支持数据库.表名格式）
+     * @param page 页码（从0开始）
+     * @param size 每页大小
+     * @return 表数据列表
+     */
+    List<Map<String, Object>> getTableDataByDataSource(Long dataSourceId, String tableName, int page, int size);
+
+    /**
      * 获取指定表的总记录数
      * @param tableName 表名
      * @return 总记录数
      */
     Long getTableCount(String tableName);
+
+    /**
+     * 根据数据源ID获取指定表的总记录数
+     * @param dataSourceId 数据源ID
+     * @param tableName 表名（支持数据库.表名格式）
+     * @return 总记录数
+     */
+    Long getTableCountByDataSource(Long dataSourceId, String tableName);
 }
 
