@@ -107,34 +107,6 @@
           </el-form>
         </el-tab-pane>
 
-        <!-- 数据验证 -->
-        <el-tab-pane label="数据验证" name="validate">
-          <el-form :model="validateForm" label-width="150px" style="max-width: 800px">
-            <el-form-item label="选择数据集">
-              <el-select v-model="validateForm.dataSetId" style="width: 100%">
-                <el-option
-                  v-for="ds in dataSets"
-                  :key="ds.id"
-                  :label="ds.name"
-                  :value="ds.id"
-                />
-              </el-select>
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" @click="handleValidate" :loading="cleaningLoading">
-                执行验证
-              </el-button>
-            </el-form-item>
-            <el-form-item v-if="validateResult" label="验证结果">
-              <el-input
-                v-model="validateResult"
-                type="textarea"
-                :rows="15"
-                readonly
-              />
-            </el-form-item>
-          </el-form>
-        </el-tab-pane>
       </el-tabs>
     </el-card>
   </div>
@@ -151,7 +123,6 @@ const activeTab = ref('deduplicate')
 const cleaningLoading = ref(false)
 const dataSets = ref([])
 const availableFields = ref([])
-const validateResult = ref('')
 
 const deduplicateForm = ref({
   dataSetId: null,
@@ -167,10 +138,6 @@ const filterForm = ref({
 const fillForm = ref({
   dataSetId: null,
   fillStrategy: 'mean'
-})
-
-const validateForm = ref({
-  dataSetId: null
 })
 
 const loadDataSets = async () => {
@@ -272,28 +239,6 @@ const handleFill = async () => {
   } finally {
     cleaningLoading.value = false
   }
-}
-
-const handleValidate = async () => {
-  if (!validateForm.value.dataSetId) {
-    ElMessage.warning('请选择数据集')
-    return
-  }
-
-  cleaningLoading.value = true
-  try {
-    const result = await dataCleaningApi.validateDataQuality(validateForm.value.dataSetId)
-    validateResult.value = result
-    ElMessage.success('验证完成')
-  } catch (error) {
-    ElMessage.error('验证失败: ' + error.message)
-  } finally {
-    cleaningLoading.value = false
-  }
-}
-
-const handleTabChange = () => {
-  validateResult.value = ''
 }
 
 onMounted(() => {

@@ -29,10 +29,6 @@
           <el-icon><Brush /></el-icon>
           <span>数据清洗</span>
         </el-menu-item>
-        <el-menu-item index="/data-quality">
-          <el-icon><Select /></el-icon>
-          <span>数据质量</span>
-        </el-menu-item>
         <el-menu-item index="/data-lineage">
           <el-icon><Share /></el-icon>
           <span>数据血缘</span>

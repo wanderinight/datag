@@ -53,14 +53,6 @@ public interface DataCleaningService {
     DataSet formatData(Long dataSetId, List<String> formatRules);
 
     /**
-     * 数据验证
-     * 验证数据质量，检查数据是否符合预定义的规则
-     * @param dataSetId 数据集ID
-     * @return 验证结果，包含发现的问题
-     */
-    String validateDataQuality(Long dataSetId);
-
-    /**
      * 执行完整数据清洗流程
      * 按照预定义的顺序执行多种清洗操作
      * @param dataSetId 数据集ID

@@ -112,24 +112,6 @@ public class DataCleaningController {
     }
 
     /**
-     * 数据验证
-     * GET /api/data-cleaning/validate/{dataSetId}
-     *
-     * 做了什么：
-     * - 验证数据质量，检查数据是否符合预定义的规则
-     * - 返回验证结果报告
-     *
-     * 为什么需要：
-     * - 评估数据质量状况
-     * - 发现数据质量问题
-     */
-    @GetMapping("/validate/{dataSetId}")
-    public ResponseEntity<String> validateDataQuality(@PathVariable Long dataSetId) {
-        String validationResult = dataCleaningService.validateDataQuality(dataSetId);
-        return ResponseEntity.ok(validationResult);
-    }
-
-    /**
      * 执行完整数据清洗流程
      * POST /api/data-cleaning/process
      *

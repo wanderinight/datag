@@ -51,10 +51,6 @@ export const dataCleaningApi = {
     })
   },
   
-  // 数据验证
-  validateDataQuality(dataSetId) {
-    return api.get(`/data-cleaning/validate/${dataSetId}`)
-  },
   
   // 执行完整清洗流程
   executeCleaningProcess(dataSetId, cleaningSteps) {

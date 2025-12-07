@@ -4,7 +4,6 @@ import DataSources from '../views/DataSources.vue'
 import DataSets from '../views/DataSets.vue'
 import Metadata from '../views/Metadata.vue'
 import DataCleaning from '../views/DataCleaning.vue'
-import DataQuality from '../views/DataQuality.vue'
 import DataLineage from '../views/DataLineage.vue'
 import Visualization from '../views/Visualization.vue'
 import ChartEditor from '../views/visualization/ChartEditor.vue'
@@ -19,7 +18,6 @@ const routes = [
   { path: '/data-sets', name: 'DataSets', component: DataSets },
   { path: '/metadata', name: 'Metadata', component: Metadata },
   { path: '/data-cleaning', name: 'DataCleaning', component: DataCleaning },
-  { path: '/data-quality', name: 'DataQuality', component: DataQuality },
   { path: '/data-lineage', name: 'DataLineage', component: DataLineage },
   { 
     path: '/visualization', 

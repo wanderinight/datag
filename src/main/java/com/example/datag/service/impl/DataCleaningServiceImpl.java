@@ -549,62 +549,6 @@ public class DataCleaningServiceImpl implements DataCleaningService {
         return dataSetRepository.save(dataSet);
     }
 
-    /**
-     * 数据验证
-     * 验证数据质量，检查数据是否符合预定义的规则
-     *
-     * 为什么需要验证：
-     * - 确保数据符合业务规则
-     * - 发现数据质量问题
-     * - 提供数据质量报告
-     *
-     * 工作原理：
-     * 1. 读取数据集数据
-     * 2. 应用质量验证规则
-     * 3. 生成验证报告
-     *
-     * @param dataSetId 数据集ID
-     * @return 验证结果，包含发现的问题
-     */
-    @Override
-    public String validateDataQuality(Long dataSetId) {
-        // 1. 获取数据集
-        DataSet dataSet = dataSetService.getDataSetById(dataSetId);
-        if (dataSet == null) {
-            throw new RuntimeException("数据集不存在: " + dataSetId);
-        }
-
-        // 2. 这里应该实现具体的数据质量验证逻辑
-        // 实际项目中需要实现各种质量检查规则
-        // 例如：检查空值比例、重复值比例、数据范围等
-
-        // 3. 获取数据集的元数据信息
-        List<MetaData> metaDataList = metaDataService.getMetaDataByDataSetId(dataSetId);
-
-        // 4. 模拟验证结果
-        StringBuilder result = new StringBuilder();
-        result.append("数据质量验证报告\n");
-        result.append("================\n");
-        result.append("数据集: ").append(dataSet.getName()).append("\n");
-        result.append("描述: ").append(dataSet.getDescription()).append("\n");
-        result.append("格式: ").append(dataSet.getFormat()).append("\n");
-        result.append("字段总数: ").append(metaDataList.size()).append("\n");
-        result.append("验证时间: ").append(java.time.LocalDateTime.now()).append("\n\n");
-
-        // 5. 分析字段质量
-        result.append("字段质量分析:\n");
-        for (MetaData metaData : metaDataList) {
-            result.append("  - ").append(metaData.getFieldName())
-                    .append(" (").append(metaData.getFieldType()).append("): ")
-                    .append(metaData.getDescription() != null ? metaData.getDescription() : "无描述")
-                    .append("\n");
-        }
-
-        result.append("\n验证状态: 通过\n"); // 实际应根据验证结果返回
-        result.append("发现的问题: 无\n"); // 实际应根据验证结果返回
-
-        return result.toString();
-    }
 
     /**
      * 执行完整数据清洗流程

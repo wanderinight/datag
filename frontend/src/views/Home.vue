@@ -24,22 +24,25 @@
 import { ref, onMounted } from 'vue'
 import { dataSourceApi } from '../api/dataSource'
 import { dataSetApi } from '../api/dataSet'
+import { metadataApi } from '../api/metadata'
 
 const stats = ref([
   { title: '数据源总数', value: 0 },
   { title: '数据集总数', value: 0 },
   { title: '今日处理', value: 0 },
-  { title: '数据质量', value: '95%' }
+  { title: '元数据总数', value: 0 }
 ])
 
 onMounted(async () => {
   try {
-    const [sources, sets] = await Promise.all([
+    const [sources, sets, metadata] = await Promise.all([
       dataSourceApi.getAll(),
-      dataSetApi.getAll()
+      dataSetApi.getAll(),
+      metadataApi.getAll()
     ])
     stats.value[0].value = sources.length || 0
     stats.value[1].value = sets.length || 0
+    stats.value[3].value = metadata.length || 0
   } catch (error) {
     console.error('加载统计数据失败:', error)
   }
